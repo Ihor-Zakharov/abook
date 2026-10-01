@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""abook-progress — простая страница с глобальным прогрессом скачивания аудиотеки.
+
+Читает (только чтение) ~/abook/state.json, ~/abook/abook.log и манифесты текущего прохода
+(форматы .mp3 и .m4a, движки vydra и direct),
+отдаёт страницу на http://127.0.0.1:8791/ с автообновлением каждые 5 с.
+"""
+import json
+import re
+import socket
+import sys
+import time
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+KYIV = ZoneInfo("Europe/Kyiv")
+
+HOME = Path.home() / "abook"
+STATE = HOME / "state.json"
+LOG = HOME / "abook.log"
+MANIFESTS = [HOME / "manifests" / f for f in (
+    "D-discoveries.json", "E-works.json", "A-prose.json", "B-scifi.json", "C-classics.json",
+    "G2-russian-classics.json", "G1-western-classics.json", "H-radioplays.json", "I-games.json", "J-extra.json")] + [HOME / "F-buldakov-top.json"]
+LOG_RE = re.compile(r"^\[(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\] \[([^\]]+)\] (.*)$")
+RUN_RE = re.compile(r"^\[[^\]]+\] processing \d+ item\(s\) with --jobs \d+(?:, engine (\w+))?")
+PART_RE = re.compile(r"downloading part (\d+)/(\d+)(?:, playlist #(\d+))?")
+PLAYLIST_RE = re.compile(r"playlist url #(\d+): (\d+) entries")
+MERGE_RE = re.compile(r"downloaded (\d+) part\(s\)(?: in (\d+)s)?, merging(?: -> (\w+))?")
+FINAL_RE = re.compile(r"^(DONE|FAILED|skip|was left|DRY-RUN|ERROR)")
+
+# Этапы обработки книги: (метка, доля готовности книги). Строки лога — из abook
+# (vydra и direct): downloading part i/n [, playlist #k] → downloaded … merging [-> m4a] → DONE.
+# Промежуточные этапы direct-движка (перекодирование, проверка, SHA-256, копирование) в логе
+# могут появиться позже — распознаются по ключевым словам.
+STAGE_WORDS = [
+    (re.compile(r"transcod|re-?encod|harmonis|aac", re.I), "перекодирование в AAC", 0.82),
+    (re.compile(r"verif|check|decode|проверк", re.I), "проверка склейки: длительность, главы, полное декодирование", 0.9),
+    (re.compile(r"sha-?256|hash", re.I), "подсчёт SHA-256", 0.93),
+    (re.compile(r"cop(y|ying)|копир", re.I), "копирование на D: и сверка SHA-256 копии", 0.96),
+]
+
+
+def load_items():
+    items = {}
+    for m in MANIFESTS:
+        try:
+            for it in json.loads(m.read_text(encoding="utf-8")).get("items", []):
+                items[it["id"]] = it
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    return items
+
+
+def tail_log(max_bytes=400_000):
+    try:
+        with LOG.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - max_bytes))
+            return f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+
+
+def classify(msg, prev):
+    """Строка лога → (этап, доля) или None, если строка не меняет этап (WARN и т. п.)."""
+    pm = PART_RE.search(msg)
+    if pm:
+        i, n = int(pm.group(1)), int(pm.group(2))
+        pl = f" · ролик плейлиста #{pm.group(3)}" if pm.group(3) else ""
+        return f"скачивание · часть {i} из {n}{pl}", (i - 1) / n * 0.8
+    pm = PLAYLIST_RE.search(msg)
+    if pm:
+        return f"получен список плейлиста (ссылка #{pm.group(1)}): {pm.group(2)} роликов", max(prev[1], 0.01)
+    pm = MERGE_RE.search(msg)
+    if pm:
+        n, sec, fmt = pm.group(1), pm.group(2), pm.group(3)
+        dl = f", скачано за {int(sec) // 60} мин {int(sec) % 60} с" if sec else ""
+        if fmt:
+            return (f"склейка в {fmt} ({n} ч.{dl}) → проверка: длительность, главы, полное декодирование, "
+                    f"SHA-256 → копирование на D:"), 0.88
+        return f"склейка {n} ч. в MP3 и проверка", 0.9
+    if "attempt" in msg or "backing off" in msg.lower() or "bot-check" in msg:
+        return "повтор после ошибки · " + prev[0], prev[1]
+    if msg.startswith("WARN"):
+        return None
+    for rx, label, frac in STAGE_WORDS:
+        if rx.search(msg):
+            return label, max(frac, prev[1])
+    return msg[:80], prev[1]
+
+
+def item_checks_ok(st):
+    """Проверено = есть SHA-256, отметка verified_at и ни одной проваленной проверки."""
+    if not (st.get("sha256") and st.get("verified_at")):
+        return False
+    checks = st.get("checks")
+    vals = []
+    if isinstance(checks, dict):
+        vals = list(checks.values())
+    elif isinstance(checks, list):
+        vals = checks
+    for v in vals:
+        if v is False:
+            return False
+        if isinstance(v, str) and v.lower() in ("fail", "failed", "error", "bad"):
+            return False
+        if isinstance(v, dict) and (v.get("ok") is False or str(v.get("status", "")).lower() in ("fail", "failed")):
+            return False
+    return True
+
+
+def item_has_warnings(st):
+    if st.get("warnings"):
+        return True
+    checks = st.get("checks")
+    vals = checks.values() if isinstance(checks, dict) else checks if isinstance(checks, list) else []
+    return any((isinstance(v, str) and v.lower() in ("warn", "warning")) or
+               (isinstance(v, dict) and str(v.get("status", "")).lower() in ("warn", "warning")) for v in vals)
+
+
+def snapshot():
+    items = load_items()
+    try:
+        state = json.loads(STATE.read_text(encoding="utf-8")).get("items", {})
+    except (OSError, ValueError):
+        state = {}
+
+    cur = {}  # id -> {"ts", "stage", "frac", "since", "warn"}
+    engine = None
+    for line in tail_log():
+        rm = RUN_RE.match(line)
+        if rm:
+            engine = rm.group(1) or "vydra"
+            continue
+        m = LOG_RE.match(line)
+        if not m or m.group(2) not in items:
+            continue
+        iid, ts, msg = m.group(2), m.group(1), m.group(3)
+        if FINAL_RE.match(msg):
+            cur.pop(iid, None)
+            continue
+        c = cur.setdefault(iid, {"ts": ts, "since": ts, "stage": "", "frac": 0.0, "warn": 0})
+        if msg.startswith("WARN"):
+            c["warn"] += 1
+        r = classify(msg, (c["stage"], c["frac"]))
+        if r:
+            c["stage"], c["frac"] = r
+        c["ts"] = ts
+
+    total_h = sum(float(it.get("duration_h") or 0) for it in items.values())
+    done_h = failed = done = verified = warned = 0
+    size = 0
+    done_times = []
+    active = []
+    partial_h = 0.0
+    formats, engines = {}, {}
+    for iid, it in items.items():
+        st = state.get(iid) or {}
+        status = st.get("status")
+        est_h = float(it.get("duration_h") or 0)
+        if status == "done":
+            done += 1
+            done_h += (st.get("duration_sec") or est_h * 3600) / 3600
+            size += st.get("size_bytes") or 0
+            fmt = st.get("format") or Path(st.get("final_path") or "x.mp3").suffix.lstrip(".").lower() or "?"
+            formats[fmt] = formats.get(fmt, 0) + 1
+            eng = st.get("engine") or "vydra"
+            engines[eng] = engines.get(eng, 0) + 1
+            verified += item_checks_ok(st)
+            warned += item_has_warnings(st)
+            try:
+                done_times.append((datetime.fromisoformat(st["updated"]).timestamp(),
+                                   (st.get("duration_sec") or 0) / 3600))
+            except (KeyError, ValueError, TypeError):
+                pass
+        elif status == "failed":
+            failed += 1
+        elif status == "in_progress" and iid in cur:
+            c = cur[iid]
+            frac = min(0.99, c["frac"])
+            partial_h += est_h * frac
+            active.append({"author": it.get("author", ""), "title": it.get("title", ""),
+                           "hours": round(est_h, 1), "stage": c["stage"] or "подготовка",
+                           "frac": round(frac, 3), "since": c["since"][11:16], "warn": c["warn"],
+                           "parts": len(it.get("urls") or [])})
+
+    now = time.time()
+    recent = [h for t, h in done_times if now - t <= 3600]
+    rate = sum(recent)  # аудиочасов за последний час
+    remaining = max(0.0, total_h - done_h - partial_h)
+    eta = None
+    if rate > 1:
+        eta_ts = now + remaining / rate * 3600
+        eta = datetime.fromtimestamp(eta_ts, KYIV).strftime("%d.%m %H:%M") + " (Киев)"
+    return {
+        "total_h": round(total_h, 1), "done_h": round(done_h, 1), "partial_h": round(partial_h, 1),
+        "pct": round(100 * (done_h + partial_h) / total_h, 2) if total_h else 0,
+        "books_total": len(items), "books_done": done, "failed": failed,
+        "verified": verified, "warned": warned, "formats": formats, "engines": engines,
+        "engine": engine,
+        "gb": round(size / 1024**3, 1), "rate": round(rate, 1), "eta": eta,
+        "active": sorted(active, key=lambda a: -a["frac"]),
+        "updated": datetime.now(KYIV).strftime("%H:%M:%S") + " Киев",
+    }
+
+
+PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Аудиотека · загрузка</title>
+<style>
+:root{--bg:#0C0E12;--card:#14171C;--rule:#232A33;--ink:#E6E9ED;--mut:#8E98A5;--acc:#86AEDA;--amb:#E0A955;--bad:#E57373;color-scheme:dark}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,"Segoe UI",sans-serif;padding:32px 16px}
+.w{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:22px}
+h1{font:600 22px/1.2 Georgia,serif;margin:0}.mut{color:var(--mut);font-size:13px}
+.big{font:600 44px/1 system-ui;font-variant-numeric:tabular-nums}
+.bar{height:14px;background:#1C2128;border-radius:8px;overflow:hidden;display:flex}
+.bar i{display:block;height:100%}.bar .d{background:var(--acc)}.bar .p{background:#4A6A8E}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:10px;overflow:hidden}
+.grid div{background:var(--card);padding:12px 14px;display:flex;flex-direction:column;gap:2px}
+.grid b{font:600 20px/1.2 system-ui;font-variant-numeric:tabular-nums}.grid span{color:var(--mut);font-size:12px}
+.job{background:var(--card);border:1px solid var(--rule);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.job .t{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}.job .s{color:var(--mut);font-size:13px}
+.mini{height:5px;background:#1C2128;border-radius:3px;overflow:hidden}.mini i{display:block;height:100%;background:var(--amb)}
+.bad{color:var(--bad)}.ok{color:#8CC7A0}.amb{color:var(--amb)}
+</style></head><body><div class="w">
+<div><h1>Аудиотека · загрузка</h1><div class="mut" id="upd">…</div></div>
+<div><div class="big" id="pct">—</div><div class="mut" id="hrs"></div></div>
+<div class="bar" aria-label="Общий прогресс"><i class="d" id="bd"></i><i class="p" id="bp"></i></div>
+<div class="grid">
+ <div><b id="books">—</b><span>книг готово</span></div>
+ <div><b id="gb">—</b><span>ГБ на D:</span></div>
+ <div><b id="rate">—</b><span>аудиочасов в час</span></div>
+ <div><b id="eta">—</b><span>примерно готово к</span></div>
+ <div><b id="fail">—</b><span>с ошибкой</span></div>
+ <div><b id="ver">—</b><span>проверено (SHA-256 + все проверки)</span></div>
+ <div><b id="warn">—</b><span>с предупреждениями</span></div>
+</div>
+<div class="mut" id="fmt"></div>
+<div><div class="mut" id="acth">Сейчас в работе</div></div>
+<div id="jobs" style="display:flex;flex-direction:column;gap:8px"></div>
+</div><script>
+const $=id=>document.getElementById(id);
+function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+async function tick(){
+ try{const r=await fetch('/api',{cache:'no-store'});const d=await r.json();
+  $('pct').textContent=d.pct.toFixed(1)+' %';
+  $('hrs').textContent=`${d.done_h} ч готово${d.partial_h?` + ~${d.partial_h} ч в работе`:''} из ${d.total_h} ч`;
+  $('bd').style.width=(100*d.done_h/d.total_h)+'%';$('bp').style.width=(100*d.partial_h/d.total_h)+'%';
+  $('books').textContent=`${d.books_done} / ${d.books_total}`;$('gb').textContent=d.gb;
+  $('rate').textContent=d.rate||'—';$('eta').textContent=d.eta||'—';
+  $('fail').textContent=d.failed;$('fail').className=d.failed?'bad':'';
+  $('ver').textContent=`${d.verified} / ${d.books_done}`;$('ver').className=d.verified?'ok':'';
+  $('warn').textContent=d.warned;$('warn').className=d.warned?'amb':'';
+  const kv=o=>Object.entries(o||{}).map(([k,v])=>`${k}: ${v}`).join(', ');
+  $('fmt').textContent=[d.engine?`движок текущего прохода: ${d.engine}`:'',Object.keys(d.formats||{}).length?`форматы готовых: ${kv(d.formats)}`:'',Object.keys(d.engines||{}).length?`движки готовых: ${kv(d.engines)}`:''].filter(Boolean).join(' · ');
+  $('acth').textContent=`Сейчас в работе: ${d.active.length}`;
+  $('jobs').innerHTML=d.active.map(a=>`<div class="job"><div class="t"><span>${esc(a.author)} — ${esc(a.title)}</span><span class="s">${a.hours} ч${a.parts>1?` · ${a.parts} ч.`:''}${d.engine?` · ${esc(d.engine)}`:''} · с ${a.since}</span></div><div class="s">${esc(a.stage)}${a.warn?` <span class="amb">· предупреждений: ${a.warn}</span>`:''}</div><div class="mini"><i style="width:${Math.max(3,a.frac*100)}%"></i></div></div>`).join('')||'<div class="mut">ничего не обрабатывается</div>';
+  $('upd').textContent='обновлено '+d.updated+' · автообновление каждые 5 с';
+ }catch(e){$('upd').textContent='нет связи с abook-progress'}
+}
+tick();setInterval(tick,5000);
+</script></body></html>"""
+
+
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        if self.path.startswith("/api"):
+            body = json.dumps(snapshot(), ensure_ascii=False).encode()
+            ctype = "application/json; charset=utf-8"
+        elif self.path in ("/", "/index.html"):
+            body, ctype = PAGE.encode(), "text/html; charset=utf-8"
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def free_port(start):
+    for p in range(start, start + 20):
+        s = socket.socket()
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", p))
+            return p
+        except OSError:
+            continue
+        finally:
+            s.close()
+    sys.exit("нет свободного порта")
+
+
+if __name__ == "__main__":
+    port = free_port(int(sys.argv[1]) if len(sys.argv) > 1 else 8791)
+    print(f"Прогресс аудиотеки: http://127.0.0.1:{port}/", flush=True)
+    ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()

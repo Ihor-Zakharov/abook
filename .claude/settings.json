@@ -1,0 +1,69 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 kit/tools/check.py:*)",
+      "Bash(python3 kit/tools/cosmos.py:*)",
+      "Bash(node kit/tools/shot.mjs:*)"
+    ],
+    "deny": []
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/kit/tools/cosmos.py\" hook pre",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/kit/tools/cosmos.py\" hook post",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/kit/tools/cosmos.py\" hook stop",
+            "timeout": 150
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/kit/tools/cosmos.py\" hook session",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/kit/tools/cosmos.py\" hook prompt",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

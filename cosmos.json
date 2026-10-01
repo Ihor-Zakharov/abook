@@ -1,0 +1,14 @@
+{
+  "kit_url": "/kit/",
+  "static": false,
+  "embedded": [
+    "abook",
+    "abook-progress"
+  ],
+  "serve": "ЗАДАТЬ: команда запуска приложения с портом {port}, например: python3 app.py --port {port}",
+  "pages": [
+    "/"
+  ],
+  "kit_dir": "kit",
+  "mode": "apply"
+}

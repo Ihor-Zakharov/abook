@@ -1,0 +1,681 @@
+#!/usr/bin/env python3
+"""abook-check — ИИ-проверка, что скачанная аудиокнига полная и части стоят в правильном порядке.
+
+    abook-check <id | запрос> [--model sonnet|opus] [--clips N] [--json]
+    abook-check --list-risky            что проверять в первую очередь
+    abook-check <id> --prompt-only      только собрать промпт (для ручной вставки в любой чат)
+    abook-check <id> --show [--json]    показать сохранённый отчёт
+
+Конвейер: найти книгу (state.json + манифесты) → нарезать ffmpeg-ом фрагменты (начало 90 с, конец 120 с,
+каждый стык частей 45+45 с, N фрагментов из середины) → распознать faster-whisper (модель small, CPU int8,
+beam 1; кэш ~/abook/check-cache/<id>/) → промпт для Claude → `claude -p` (без инструментов) → строгий JSON →
+русский отчёт; JSON сохраняется в ~/abook/check-reports/<id>.json.
+
+state.json и манифесты только читаются. Распознавание речи — в отдельном venv ~/abook/.venv-check
+(этот же файл запускается там с --_stt-worker).
+"""
+import argparse
+import difflib
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import unicodedata
+from datetime import datetime
+from pathlib import Path
+
+HOME = Path.home() / "abook"
+STATE = HOME / "state.json"
+MANIFEST_FILES = sorted((HOME / "manifests").glob("*.json")) + [HOME / "F-buldakov-top.json"]
+FULL_CATALOG = "F-buldakov.json"          # весь каталог Булдакова — ищем в нём последним
+ESTIMATES = HOME / "text-estimates.json"
+REPLACEMENTS = HOME / "replacements.json"
+CACHE = HOME / "check-cache"
+REPORTS = HOME / "check-reports"
+VENV_PY = HOME / ".venv-check" / "bin" / "python"
+FFMPEG = shutil.which("ffmpeg") or "ffmpeg"
+FFPROBE = shutil.which("ffprobe") or "ffprobe"
+CLAUDE = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+
+VERDICTS = {
+    "complete": "полная",
+    "probably_complete": "вероятно полная",
+    "incomplete": "НЕПОЛНАЯ",
+    "wrong_order": "НЕВЕРНЫЙ ПОРЯДОК ЧАСТЕЙ",
+    "wrong_work": "НЕ ТО ПРОИЗВЕДЕНИЕ",
+    "cant_tell": "нельзя определить",
+}
+BOUNDARY_ST = {
+    "continuous": "продолжение", "chapter_break": "конец главы → новая глава", "gap": "ПРОПУСК",
+    "overlap": "ПОВТОР/НАХЛЁСТ", "wrong_order": "НЕ ТОТ ПОРЯДОК", "unclear": "неясно",
+}
+SEGMENT_ST = {
+    "ok": "совпадает", "intro": "вступление/анонс, затем текст", "outro": "финал + титры/послесловие",
+    "mid_text": "СЕРЕДИНА ТЕКСТА", "wrong_work": "ДРУГОЕ ПРОИЗВЕДЕНИЕ", "unclear": "неясно",
+}
+
+
+# --------------------------------------------------------------------------- utils
+
+def hms(sec):
+    sec = max(0, int(round(sec or 0)))
+    return f"{sec // 3600}:{sec % 3600 // 60:02d}:{sec % 60:02d}"
+
+
+def norm(s):
+    s = unicodedata.normalize("NFKC", str(s or "")).lower().replace("ё", "е")
+    return re.sub(r"[^\w]+", " ", s).strip()
+
+
+def load_json(p, default=None):
+    try:
+        return json.loads(Path(p).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def die(msg, code=1):
+    print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def load_catalog():
+    """id -> манифестная запись (+ _manifest). Более ранние файлы важнее; F-buldakov.json — последним."""
+    items = {}
+    files = [f for f in MANIFEST_FILES if f.name != FULL_CATALOG] + \
+            [f for f in MANIFEST_FILES if f.name == FULL_CATALOG]
+    for f in files:
+        d = load_json(f, {}) or {}
+        for it in d.get("items", []) if isinstance(d, dict) else []:
+            if isinstance(it, dict) and it.get("id") and it["id"] not in items:
+                items[it["id"]] = {**it, "_manifest": f.name}
+    return items
+
+
+def load_state():
+    d = load_json(STATE, {}) or {}
+    return d.get("items", {}) if isinstance(d, dict) else {}
+
+
+def load_estimates():
+    d = load_json(ESTIMATES, {}) or {}
+    return d.get("items", {}) if isinstance(d, dict) else {}
+
+
+def find_item(query, catalog, state):
+    """Точный id или нечёткий поиск по id/автору/названию. Возвращает (id, [кандидаты])."""
+    ids = set(catalog) | set(state)
+    if query in ids:
+        return query, []
+    q = norm(query)
+    toks = q.split()
+
+    def hay(iid):
+        m, s = catalog.get(iid, {}), state.get(iid, {})
+        return norm(" ".join([iid.replace("-", " "), m.get("author") or s.get("author") or "",
+                              m.get("title") or s.get("title") or ""]))
+    hits = [i for i in ids if all(t in hay(i) for t in toks)]
+    if not hits:
+        scored = sorted(((difflib.SequenceMatcher(None, q, hay(i)).ratio(), i) for i in ids), reverse=True)
+        hits = [i for r, i in scored[:8] if r > 0.35]
+    # сначала скачанные
+    hits.sort(key=lambda i: (state.get(i, {}).get("status") != "done", i))
+    if len(hits) == 1:
+        return hits[0], []
+    return None, hits
+
+
+# --------------------------------------------------------------------------- media
+
+def ffprobe(path):
+    r = subprocess.run([FFPROBE, "-v", "error", "-show_chapters", "-show_format", "-of", "json", str(path)],
+                       capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError(f"ffprobe: {r.stderr.strip()[-300:]}")
+    return json.loads(r.stdout or "{}")
+
+
+def part_layout(st, probe):
+    """Список частей [{'n','start','end','title'}] — по главам файла, иначе по state.parts."""
+    dur = float((probe.get("format") or {}).get("duration") or st.get("duration_sec") or 0)
+    parts = []
+    for i, c in enumerate(probe.get("chapters") or []):
+        try:
+            parts.append({"n": i + 1, "start": float(c["start_time"]), "end": float(c["end_time"]),
+                          "title": (c.get("tags") or {}).get("title") or ""})
+        except (KeyError, ValueError, TypeError):
+            pass
+    src = "главы файла (ffprobe)"
+    if len(parts) < 2 and len(st.get("parts") or []) > 1:
+        parts, t = [], 0.0
+        for i, p in enumerate(st["parts"]):
+            d = float(p.get("duration") or 0)
+            parts.append({"n": i + 1, "start": t, "end": t + d, "title": p.get("title") or ""})
+            t += d
+        src = "state.json parts"
+    if not parts:
+        parts = [{"n": 1, "start": 0.0, "end": dur, "title": ""}]
+        src = "один файл без глав"
+    # сведения о частях из state (длительность у источника, sha)
+    sp = st.get("parts") or []
+    if len(sp) == len(parts):
+        for p, s in zip(parts, sp):
+            p["source_duration"] = s.get("source_duration")
+            p["url"] = s.get("url")
+    return dur, parts, src
+
+
+def plan_clips(dur, parts, n_interior, clip_len):
+    clips = [{"key": "start", "label": "НАЧАЛО КНИГИ", "start": 0.0, "len": min(90.0, dur)}]
+    for a, b in zip(parts, parts[1:]):
+        t = b["start"]
+        clips.append({"key": f"b{a['n']:03d}_end", "label": f"КОНЕЦ ЧАСТИ {a['n']} (стык {a['n']}→{b['n']})",
+                      "start": max(0.0, t - 45.0), "len": min(45.0, t), "boundary": a["n"]})
+        clips.append({"key": f"b{a['n']:03d}_beg", "label": f"НАЧАЛО ЧАСТИ {b['n']} (стык {a['n']}→{b['n']})",
+                      "start": t, "len": min(45.0, max(0.0, dur - t)), "boundary": a["n"]})
+    for k in range(1, n_interior + 1):
+        c = dur * k / (n_interior + 1) - clip_len / 2
+        clips.append({"key": f"mid{k}", "label": f"СЕРЕДИНА, образец {k} из {n_interior}",
+                      "start": max(0.0, c), "len": min(clip_len, dur)})
+    clips.append({"key": "end", "label": "КОНЕЦ КНИГИ", "start": max(0.0, dur - 120.0), "len": min(120.0, dur)})
+    for c in clips:
+        c["start"], c["len"] = round(c["start"], 2), round(c["len"], 2)
+    return [c for c in clips if c["len"] >= 1.0]
+
+
+SIL_START = re.compile(r"silence_start: (-?[\d.]+)")
+SIL_END = re.compile(r"silence_end: (-?[\d.]+) \| silence_duration: ([\d.]+)")
+VOL = re.compile(r"(mean|max)_volume: (-?[\d.]+|-inf) dB")
+
+
+def cut_clip(src, clip, wav):
+    """Вырезать фрагмент в WAV 16 кГц моно + заодно паузы (silencedetect) и громкость."""
+    cmd = [FFMPEG, "-hide_banner", "-nostdin", "-y", "-ss", f"{clip['start']:.2f}", "-t", f"{clip['len']:.2f}",
+           "-i", str(src), "-vn", "-ac", "1", "-ar", "16000",
+           "-af", "silencedetect=n=-40dB:d=1.5,volumedetect", "-c:a", "pcm_s16le", str(wav)]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    if r.returncode != 0 or not Path(wav).exists():
+        raise RuntimeError(f"ffmpeg: {r.stderr.strip()[-300:]}")
+    sil, cur = [], None
+    for line in r.stderr.splitlines():
+        m = SIL_START.search(line)
+        if m:
+            cur = float(m.group(1))
+        m = SIL_END.search(line)
+        if m:
+            e = float(m.group(1))
+            sil.append([round(cur if cur is not None else e - float(m.group(2)), 1), round(e, 1)])
+            cur = None
+    if cur is not None:
+        sil.append([round(cur, 1), round(clip["len"], 1)])
+    vol = {k: (None if v == "-inf" else float(v)) for k, v in VOL.findall(r.stderr)}
+    return {"silences": sil, "mean_db": vol.get("mean"), "max_db": vol.get("max")}
+
+
+# --------------------------------------------------------------------------- STT (venv)
+
+def stt_worker():
+    """Запускается в ~/abook/.venv-check: читает задание JSON из stdin, пишет транскрипты в файлы."""
+    job = json.load(sys.stdin)
+    from faster_whisper import WhisperModel
+    t0 = time.time()
+    model = WhisperModel(job["model"], device="cpu", compute_type="int8", cpu_threads=job.get("threads", 4))
+    print(f"  модель {job['model']} загружена за {time.time() - t0:.1f} с", file=sys.stderr, flush=True)
+    for i, c in enumerate(job["clips"], 1):
+        t1 = time.time()
+        det = None
+        if c.get("detect"):
+            try:
+                _, info = model.transcribe(c["wav"], language=None, beam_size=1, without_timestamps=True,
+                                           condition_on_previous_text=False)
+                det = [info.language, round(info.language_probability, 2)]
+            except Exception as e:                                   # noqa: BLE001
+                det = [f"?({type(e).__name__})", 0]
+        segs, info = model.transcribe(c["wav"], language=job["lang"], beam_size=1, vad_filter=False,
+                                      condition_on_previous_text=False, temperature=0.0)
+        out = []
+        for s in segs:
+            out.append([round(s.start, 1), round(s.end, 1), s.text.strip(), round(s.no_speech_prob, 2)])
+        res = {"segments": out, "text": " ".join(s[2] for s in out).strip(), "detected": det,
+               "stt_sec": round(time.time() - t1, 1)}
+        Path(c["out"]).write_text(json.dumps(res, ensure_ascii=False), encoding="utf-8")
+        print(f"  [{i}/{len(job['clips'])}] {Path(c['out']).stem}: {res['stt_sec']} с", file=sys.stderr, flush=True)
+
+
+def transcribe(clips, lang, model, threads, verbose):
+    if not VENV_PY.exists():
+        die("нет venv для распознавания: uv venv ~/abook/.venv-check && "
+            "uv pip install --python ~/abook/.venv-check faster-whisper")
+    job = {"model": model, "lang": lang, "threads": threads,
+           "clips": [{"wav": c["_wav"], "out": c["_txt"], "detect": c["key"] in ("start", "mid1")} for c in clips]}
+    r = subprocess.run(["nice", "-n", "10", str(VENV_PY), os.path.abspath(__file__), "--_stt-worker"],
+                       input=json.dumps(job), text=True, stdout=subprocess.PIPE,
+                       stderr=None if verbose else subprocess.PIPE, timeout=3600)
+    if r.returncode != 0:
+        die(f"распознавание речи упало: {(r.stderr or '')[-800:]}")
+
+
+# --------------------------------------------------------------------------- prompt / LLM
+
+SCHEMA = """{
+  "verdict": "complete | probably_complete | incomplete | wrong_order | wrong_work | cant_tell",
+  "confidence": 0.0,
+  "summary_ru": "2–4 предложения: итог и главное основание",
+  "opening": {"status": "ok | intro | mid_text | wrong_work | unclear",
+              "evidence": "дословная цитата из транскрипта", "comment": "что это за начало и совпадает ли с началом произведения"},
+  "ending": {"status": "ok | outro | mid_text | wrong_work | unclear",
+             "evidence": "дословная цитата", "comment": "совпадает ли с настоящей концовкой"},
+  "boundaries": [
+    {"boundary": 1, "between": "1→2", "time": "Ч:ММ:СС",
+     "status": "continuous | chapter_break | gap | overlap | wrong_order | unclear",
+     "evidence_end": "цитата из конца части N", "evidence_start": "цитата из начала части N+1",
+     "comment": "почему так"}
+  ],
+  "issues": [
+    {"type": "abridged | wrong_work | wrong_translation | wrong_language | ai_garbled | ads | duplicate | missing_part | truncated | other",
+     "severity": "low | medium | high", "where": "метка фрагмента или время", "evidence": "цитата", "comment": ""}
+  ],
+  "duration_assessment": "сравнение реальной длительности с ожидаемой по объёму текста",
+  "translation_or_edition": "какой перевод/редакция/постановка угадывается, если можно",
+  "recommendation": "keep | listen_manually | redownload | replace_source",
+  "listen_at": [{"time": "Ч:ММ:СС", "why": "что проверить на слух"}]
+}"""
+
+SYSTEM = ("Ты — внимательный редактор аудиокниг и знаток литературы. Проверяешь по фрагментам распознанной "
+          "речи, что аудиокнига полная и части склеены в правильном порядке. Отвечаешь ТОЛЬКО одним JSON-объектом "
+          "по заданной схеме, без markdown и без текста вокруг. Все текстовые поля — по-русски; цитаты — дословно "
+          "из транскриптов (на языке оригинала).")
+
+
+def build_prompt(ctx, clips_out):
+    m, st, est = ctx["manifest"], ctx["state"], ctx["estimate"]
+    L = ["# Задача",
+         "Проверь, что скачанная аудиокнига ПОЛНАЯ и её части склеены в ПРАВИЛЬНОМ ПОРЯДКЕ. У тебя нет аудио — "
+         "только фрагменты, распознанные Whisper (small, могут быть ошибки распознавания, особенно в именах; "
+         "пустой текст = тишина или музыка).", "",
+         "# Книга",
+         f"- id: {ctx['id']}",
+         f"- автор: {m.get('author') or st.get('author') or '?'}",
+         f"- название: {m.get('title') or st.get('title') or '?'}",
+         f"- чтец/постановка: {m.get('narrator') or st.get('narrator') or 'не указан'}",
+         f"- язык: {ctx['lang']}; тип: {m.get('kind') or '?'}; источник: {m.get('source') or '?'}"]
+    if m.get("about"):
+        L.append(f"- о книге: {m['about']}")
+    for k in ("note_ru", "quality"):
+        if m.get(k):
+            L.append(f"- заметка составителя: {m[k]}")
+    L.append(f"- реальная длительность файла: {hms(ctx['duration'])} ({ctx['duration'] / 3600:.2f} ч)")
+    if m.get("duration_h"):
+        L.append(f"- длительность по данным площадки (манифест): {float(m['duration_h']):.2f} ч")
+    if est.get("expected_h_low") is not None:
+        L.append(f"- ожидаемо по объёму текста: {est.get('expected_h_low')}–{est.get('expected_h_high')} ч "
+                 f"(≈{est.get('words_est')} слов; оценка «{est.get('verdict')}», уверенность {est.get('confidence')}; "
+                 f"{est.get('note') or ''})")
+    elif est:
+        L.append(f"- оценка по объёму текста неприменима ({est.get('note') or est.get('verdict')})")
+    if ctx.get("replacement"):
+        L.append(f"- история замены источника: {ctx['replacement']}")
+    if st.get("warnings"):
+        L.append(f"- предупреждения загрузчика: {'; '.join(map(str, st['warnings']))}")
+    L += ["", f"# Части ({len(ctx['parts'])}; разметка: {ctx['layout_src']})"]
+    for p in ctx["parts"]:
+        extra = ""
+        if p.get("source_duration"):
+            extra = f", у источника {hms(p['source_duration'])}"
+        L.append(f"{p['n']}. {hms(p['start'])}–{hms(p['end'])} ({hms(p['end'] - p['start'])}{extra}) "
+                 f"«{p.get('title') or ''}»")
+    L += ["", "# Фрагменты (время — от начала склеенного файла; паузы ≥1,5 с указаны относительно начала фрагмента)"]
+    for c in clips_out:
+        t = c.get("transcript") or {}
+        meta = [f"{hms(c['start'])}–{hms(c['start'] + c['len'])}"]
+        if c.get("mean_db") is not None:
+            meta.append(f"громкость ср. {c['mean_db']:.0f} дБ")
+        if c.get("silences"):
+            meta.append("паузы: " + ", ".join(f"{a:g}–{b:g} с" for a, b in c["silences"][:6]))
+        if t.get("detected"):
+            meta.append(f"язык по Whisper: {t['detected'][0]} ({t['detected'][1]})")
+        L.append(f"\n## [{c['key']}] {c['label']} · " + " · ".join(meta))
+        L.append((t.get("text") or "").strip() or "(речь не распознана: тишина/музыка)")
+    L += ["", "# Что оценить",
+          "1. Начало: это настоящее начало произведения (первые строки текста) или обычное вступление аудиокниги "
+          "(название, автор, чтец, музыка), после которого идёт начало? Или запись начинается с середины / это другое "
+          "произведение? Если знаешь первые строки оригинала/перевода — сравни.",
+          "2. Конец: это настоящая концовка произведения (последние строки, «конец», титры после финала) или обрыв "
+          "посреди действия?",
+          "3. Каждый стык частей: продолжает ли начало части N+1 конец части N — без пропуска (выпал кусок), без "
+          "повтора/нахлёста (тот же текст дважды) и в правильном порядке (не следующая-через-одну часть, не "
+          "предыдущая)? Нормально, если на стыке заставка/«часть вторая»/повтор названия — это chapter_break или "
+          "continuous. Учитывай, что фрагменты короткие: если не можешь решить — unclear, а не gap.",
+          "4. Признаки: сокращённое издание/радиоверсия (длительность заметно меньше ожидаемой, пересказ), не то "
+          "произведение, не тот перевод, не тот язык, искажённая/«машинная» ИИ-озвучка (бессвязные слова), реклама и "
+          "вставки канала, повторяющиеся куски.",
+          "5. Итог: complete / probably_complete / incomplete / wrong_order / wrong_work / cant_tell, уверенность "
+          "0–1 и конкретные доказательства (дословные цитаты с меткой фрагмента). Не выдумывай содержание, которого "
+          "нет во фрагментах; если чего-то не знаешь о тексте — так и скажи.",
+          "", "# Формат ответа",
+          "Верни ТОЛЬКО один JSON-объект строго по схеме (все ключи обязательны; boundaries — по одному на каждый "
+          "стык, в порядке; пустые списки допустимы):", SCHEMA]
+    return "\n".join(L)
+
+
+def extract_json(text):
+    text = (text or "").strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
+    try:
+        return json.loads(text)
+    except ValueError:
+        pass
+    a, b = text.find("{"), text.rfind("}")
+    if a >= 0 and b > a:
+        return json.loads(text[a:b + 1])
+    raise ValueError("в ответе нет JSON")
+
+
+def call_claude(prompt, model, timeout):
+    cmd = [CLAUDE, "-p", "--model", model, "--output-format", "json", "--tools", "",
+           "--no-session-persistence", "--strict-mcp-config", "--system-prompt", SYSTEM]
+    t0 = time.time()
+    r = subprocess.run(cmd, input=prompt, text=True, capture_output=True, timeout=timeout,
+                       cwd=str(CACHE))
+    dt = time.time() - t0
+    if r.returncode != 0 and not r.stdout.strip():
+        raise RuntimeError(f"claude exit {r.returncode}: {r.stderr.strip()[-500:]}")
+    env = json.loads(r.stdout)
+    if env.get("is_error"):
+        raise RuntimeError(f"claude: {str(env.get('result'))[:500]}")
+    return env.get("result") or "", {"sec": round(dt, 1), "cost_usd": env.get("total_cost_usd"),
+                                     "model": ",".join((env.get("modelUsage") or {}).keys()) or model}
+
+
+def ask_claude(prompt, model, timeout):
+    meta_all = []
+    text, meta = call_claude(prompt, model, timeout)
+    meta_all.append(meta)
+    try:
+        res = extract_json(text)
+    except ValueError:
+        retry = (prompt + "\n\nВНИМАНИЕ: предыдущий ответ не был корректным JSON. Верни ТОЛЬКО один JSON-объект "
+                 "по схеме — первый символ «{», последний «}», без пояснений и без ```.")
+        text, meta = call_claude(retry, model, timeout)
+        meta_all.append(meta)
+        res = extract_json(text)
+    if res.get("verdict") not in VERDICTS:
+        res["verdict_raw"], res["verdict"] = res.get("verdict"), "cant_tell"
+    return res, meta_all
+
+
+# --------------------------------------------------------------------------- report
+
+def print_report(rep):
+    r, b = rep["result"], rep["book"]
+    print(f"\n{b['author']} — {b['title']}  [{rep['id']}]")
+    print(f"Файл: {rep['file']}")
+    exp = ""
+    if b.get("expected_h") and None not in b["expected_h"]:
+        exp = f"; ожидалось по тексту {b['expected_h'][0]}–{b['expected_h'][1]} ч"
+    print(f"Длительность: {hms(b['duration_sec'])} ({b['duration_sec'] / 3600:.2f} ч){exp}; частей: {b['parts']}")
+    print("")
+    conf = r.get("confidence")
+    conf = f"{float(conf):.0%}" if isinstance(conf, (int, float)) else str(conf)
+    print(f"ВЕРДИКТ: {VERDICTS.get(r.get('verdict'), r.get('verdict'))}  (уверенность {conf}, модель {rep['model']})")
+    if r.get("summary_ru"):
+        print(f"  {r['summary_ru']}")
+    print("")
+    for key, name in (("opening", "Начало"), ("ending", "Конец")):
+        o = r.get(key) or {}
+        print(f"{name}: {SEGMENT_ST.get(o.get('status'), o.get('status'))}. {o.get('comment') or ''}")
+        if o.get("evidence"):
+            print(f"    «{o['evidence']}»")
+    bs = r.get("boundaries") or []
+    if bs:
+        print("\nСтыки частей:")
+        print(f"  {'№':>3}  {'стык':<7} {'время':>8}  {'оценка':<26} комментарий")
+        for x in bs:
+            print(f"  {x.get('boundary', ''):>3}  {x.get('between', ''):<7} {x.get('time', ''):>8}  "
+                  f"{BOUNDARY_ST.get(x.get('status'), str(x.get('status'))):<26} {x.get('comment') or ''}")
+            if x.get("evidence_end") or x.get("evidence_start"):
+                print(f"{'':25}…«{x.get('evidence_end') or ''}» | «{x.get('evidence_start') or ''}»…")
+    if r.get("issues"):
+        print("\nПроблемы:")
+        for x in r["issues"]:
+            print(f"  - [{x.get('severity')}] {x.get('type')} @ {x.get('where') or '—'}: {x.get('comment') or ''}")
+            if x.get("evidence"):
+                print(f"      «{x['evidence']}»")
+    if r.get("duration_assessment"):
+        print(f"\nДлительность: {r['duration_assessment']}")
+    if r.get("translation_or_edition"):
+        print(f"Перевод/редакция: {r['translation_or_edition']}")
+    rec = {"keep": "оставить", "listen_manually": "послушать вручную", "redownload": "перекачать",
+           "replace_source": "искать другой источник"}
+    print(f"\nРекомендация: {rec.get(r.get('recommendation'), r.get('recommendation'))}")
+    if r.get("listen_at"):
+        print("Послушать:")
+        for x in r["listen_at"]:
+            print(f"  {x.get('time')}  {x.get('why')}")
+    t = rep["timings"]
+    print(f"\nВремя: нарезка {t['cut_sec']} с, распознавание {t['stt_sec']} с "
+          f"({t['clips_transcribed']} новых из {t['clips']}), Claude {t['llm_sec']} с; всего {t['total_sec']} с"
+          + (f"; ${t['cost_usd']:.3f}" if t.get("cost_usd") else ""))
+    print(f"Отчёт: {REPORTS / (rep['id'] + '.json')}")
+
+
+# --------------------------------------------------------------------------- list-risky
+
+# те же «рискованные» слова, что ищет `abook verify` в полях манифеста
+RISK_RE = re.compile(
+    r"возможно\s+неполн|неполн\w*|сокращ\w*|избранн\w*|част\w*\s+(?:отсутств|нет\b)|отсутству\w*\s+част|"
+    r"не\s+хватает|без\s+(?:последн|финал)|глав[аы]?\s+\d+\s*[–—-]\s*\d+|только\s+(?:перв|част|глав)|"
+    r"abridged|incomplete|excerpt", re.I)
+RISK_FIELDS = ("title", "narrator", "about", "why", "note_ru", "quality", "kind", "source")
+
+
+def list_risky(catalog, state):
+    est = load_estimates()
+    repl = (load_json(REPLACEMENTS, {}) or {}).get("items", {})
+    rows = []
+    for iid in sorted(set(catalog) | set(state)):
+        m, st, e = catalog.get(iid, {}), state.get(iid, {}), est.get(iid, {})
+        if m.get("_manifest") == FULL_CATALOG and iid not in state:
+            continue
+        why, score = [], 0
+        if e.get("verdict") in ("short", "long"):
+            why.append(f"по объёму текста {'КОРОЧЕ' if e['verdict'] == 'short' else 'длиннее'} ожидаемого "
+                       f"(ratio {e.get('ratio')}, {e.get('expected_h_low')}–{e.get('expected_h_high')} ч)")
+            score += 3 if e["verdict"] == "short" else 2
+        if st.get("warnings"):
+            why.append("предупреждения: " + "; ".join(map(str, st["warnings"]))[:160])
+            score += 3
+        checks = st.get("checks")
+        if isinstance(checks, dict) and any(v is False or (isinstance(v, dict) and v.get("ok") is False)
+                                            for v in checks.values()):
+            why.append("проваленные проверки в state")
+            score += 4
+        if m.get("note_ru"):
+            why.append("заметка: " + m["note_ru"][:120])
+            score += 2
+        risky = sorted({f for f in RISK_FIELDS if f != "note_ru" and RISK_RE.search(str(m.get(f) or ""))})
+        if risky:
+            hit = RISK_RE.search(" ".join(str(m.get(f)) for f in risky)).group(0)
+            why.append(f"в манифесте «{hit}» ({', '.join(risky)})")
+            score += 2
+        r = repl.get(iid) or {}
+        if r.get("action") == "replace":
+            why.append("источник заменён после ресёрча")
+            score += 1
+        n_urls = len(m.get("urls") or st.get("source_urls") or [])
+        if why and n_urls > 1:
+            why.append(f"{n_urls} частей")
+            score += 1
+        if not why:
+            continue
+        rep = load_json(REPORTS / f"{iid}.json")
+        checked = VERDICTS.get(((rep or {}).get("result") or {}).get("verdict"), "") if rep else ""
+        rows.append((st.get("status") != "done", -score, iid, st.get("status") or "не начата", checked, why))
+    rows.sort()
+    print(f"{'id':<42} {'статус':<11} {'проверка':<18} почему")
+    for _, s, iid, status, checked, why in rows:
+        print(f"{iid:<42} {status:<11} {checked or '—':<18} {' | '.join(why)}")
+    done = sum(1 for r in rows if r[3] == "done")
+    print(f"\nВсего {len(rows)} (скачано {done}). Проверять: abook-check <id>")
+
+
+# --------------------------------------------------------------------------- main
+
+def main():
+    if "--_stt-worker" in sys.argv:
+        return stt_worker()
+    ap = argparse.ArgumentParser(prog="abook-check", description=__doc__.split("\n\n")[0])
+    ap.add_argument("query", nargs="*", help="id книги или часть автора/названия")
+    ap.add_argument("--model", default="sonnet", help="sonnet (по умолчанию) или opus")
+    ap.add_argument("--clips", type=int, default=3, help="сколько фрагментов из середины (по умолчанию 3)")
+    ap.add_argument("--clip-len", type=float, default=60, help="длина фрагмента из середины, с (60)")
+    ap.add_argument("--whisper", default="small", help="модель faster-whisper (small)")
+    ap.add_argument("--threads", type=int, default=4, help="потоков CTranslate2 (4; больше при загруженном CPU только хуже)")
+    ap.add_argument("--json", action="store_true", help="напечатать сырой JSON отчёта")
+    ap.add_argument("--prompt-only", action="store_true", help="собрать промпт и напечатать его, без Claude")
+    ap.add_argument("--no-cache", action="store_true", help="распознать заново")
+    ap.add_argument("--timeout", type=int, default=900, help="таймаут вызова Claude, с")
+    ap.add_argument("--list-risky", action="store_true", help="что проверять в первую очередь")
+    ap.add_argument("--show", action="store_true", help="показать сохранённый отчёт, ничего не запуская")
+    ap.add_argument("-v", "--verbose", action="store_true")
+    a = ap.parse_args()
+
+    catalog, state = load_catalog(), load_state()
+    if a.list_risky:
+        return list_risky(catalog, state)
+    if not a.query:
+        ap.error("укажите id или запрос (или --list-risky)")
+    iid, cands = find_item(" ".join(a.query), catalog, state)
+    if not iid:
+        if not cands:
+            die("ничего не найдено")
+        print("Найдено несколько — уточните id:", file=sys.stderr)
+        for c in cands[:25]:
+            m, s = catalog.get(c, {}), state.get(c, {})
+            print(f"  {c:<42} {s.get('status') or '—':<11} {m.get('author') or s.get('author')} — "
+                  f"{m.get('title') or s.get('title')}", file=sys.stderr)
+        sys.exit(2)
+    m, st = catalog.get(iid, {}), state.get(iid, {})
+    if a.show:
+        rep = load_json(REPORTS / f"{iid}.json")
+        if not rep:
+            die(f"{iid}: отчёта ещё нет — запустите abook-check {iid}")
+        return print(json.dumps(rep, ensure_ascii=False, indent=1)) if a.json else print_report(rep)
+    if st.get("status") != "done":
+        die(f"{iid}: книга ещё не скачана (статус: {st.get('status') or 'нет в state'})")
+    src = Path(st.get("final_path") or "")
+    if not src.is_file():
+        die(f"{iid}: файл не найден: {src}")
+    if a.model not in ("sonnet", "opus") and not a.model.startswith("claude-"):
+        die("--model: sonnet или opus")
+
+    t_all = time.time()
+    lang = (m.get("lang") or "ru").strip().lower()[:2]
+    if lang not in ("ru", "uk", "en"):
+        lang = "ru"
+    probe = ffprobe(src)
+    dur, parts, layout_src = part_layout(st, probe)
+    clips = plan_clips(dur, parts, max(0, a.clips), a.clip_len)
+
+    cdir = CACHE / iid
+    cdir.mkdir(parents=True, exist_ok=True)
+    fst = src.stat()
+    fp = hashlib.sha1(f"{st.get('sha256') or ''}|{fst.st_size}|{int(fst.st_mtime)}|{a.whisper}|{lang}"
+                      .encode()).hexdigest()[:12]
+    meta_p = cdir / "meta.json"
+    meta = load_json(meta_p, {}) or {}
+    if meta.get("fingerprint") != fp or a.no_cache:
+        for f in cdir.glob("*.json"):
+            f.unlink()
+        meta = {"fingerprint": fp, "file": str(src), "clips": {}}
+
+    # 1. нарезка (+ паузы/громкость) — только для фрагментов без кэша
+    t0 = time.time()
+    todo = []
+    for c in clips:
+        ck = f"{c['key']}_{c['start']:.1f}_{c['len']:.1f}"
+        c["_txt"] = str(cdir / f"{ck}.json")
+        c["_wav"] = str(cdir / f"{ck}.wav")
+        if Path(c["_txt"]).exists() and ck in meta["clips"]:
+            c.update(meta["clips"][ck])
+            continue
+        info = cut_clip(src, c, c["_wav"])
+        c.update(info)
+        meta["clips"][ck] = info
+        todo.append(c)
+    cut_sec = time.time() - t0
+    if a.verbose or todo:
+        print(f"{iid}: {len(clips)} фрагментов ({len(todo)} новых), частей {len(parts)} [{layout_src}], "
+              f"язык {lang}, нарезка {cut_sec:.1f} с; распознаю…", file=sys.stderr, flush=True)
+
+    # 2. распознавание
+    t0 = time.time()
+    if todo:
+        transcribe(todo, lang, a.whisper, a.threads, a.verbose)
+        for c in todo:
+            Path(c["_wav"]).unlink(missing_ok=True)
+    stt_sec = time.time() - t0
+    meta_p.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    clips_out = []
+    for c in clips:
+        tr = load_json(c["_txt"], {}) or {}
+        clips_out.append({k: v for k, v in c.items() if not k.startswith("_")} | {"transcript": tr})
+
+    est = load_estimates().get(iid) or {}
+    repl = ((load_json(REPLACEMENTS, {}) or {}).get("items", {}).get(iid) or {}).get("reason")
+    ctx = {"id": iid, "manifest": m, "state": st, "estimate": est, "replacement": repl, "lang": lang,
+           "duration": dur, "parts": parts, "layout_src": layout_src}
+    prompt = build_prompt(ctx, clips_out)
+    (cdir / "prompt.txt").write_text(prompt, encoding="utf-8")
+    if a.prompt_only:
+        print(prompt)
+        print(f"\n[промпт сохранён: {cdir / 'prompt.txt'}]", file=sys.stderr)
+        return
+
+    # 3. Claude
+    print(f"{iid}: спрашиваю Claude ({a.model})…", file=sys.stderr, flush=True)
+    try:
+        result, llm_meta = ask_claude(prompt, a.model, a.timeout)
+    except (RuntimeError, ValueError, subprocess.TimeoutExpired, json.JSONDecodeError) as e:
+        die(f"{iid}: Claude не дал корректный ответ: {e}\nПромпт: {cdir / 'prompt.txt'}")
+
+    rep = {
+        "id": iid, "checked_at": datetime.now().isoformat(timespec="seconds"), "model": a.model,
+        "llm": llm_meta, "file": str(src), "sha256": st.get("sha256"), "whisper": a.whisper, "lang": lang,
+        "file_size": fst.st_size, "file_mtime": int(fst.st_mtime),   # чтобы abook_tg мог переиспользовать свежий отчёт
+        "book": {"author": m.get("author") or st.get("author"), "title": m.get("title") or st.get("title"),
+                 "narrator": m.get("narrator") or st.get("narrator"), "duration_sec": round(dur, 1),
+                 "parts": len(parts), "layout": layout_src,
+                 "expected_h": [est.get("expected_h_low"), est.get("expected_h_high")]
+                 if est.get("expected_h_low") is not None else None,
+                 "estimate_verdict": est.get("verdict")},
+        "parts": parts,
+        "clips": [{k: v for k, v in c.items() if k != "transcript"} | {"text": c["transcript"].get("text", ""),
+                  "detected": c["transcript"].get("detected")} for c in clips_out],
+        "result": result,
+        "timings": {"cut_sec": round(cut_sec, 1), "stt_sec": round(stt_sec, 1),
+                    "llm_sec": round(sum(x["sec"] for x in llm_meta), 1),
+                    "total_sec": round(time.time() - t_all, 1), "clips": len(clips),
+                    "clips_transcribed": len(todo),
+                    "cost_usd": sum(x.get("cost_usd") or 0 for x in llm_meta) or None},
+    }
+    REPORTS.mkdir(parents=True, exist_ok=True)
+    out = REPORTS / f"{iid}.json"
+    tmp = out.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(rep, ensure_ascii=False, indent=1), encoding="utf-8")
+    os.replace(tmp, out)
+    if a.json:
+        print(json.dumps(rep, ensure_ascii=False, indent=1))
+    else:
+        print_report(rep)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        die("прервано", 130)

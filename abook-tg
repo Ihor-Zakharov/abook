@@ -1,0 +1,922 @@
+#!/home/ihor/abook/.venv-tg/bin/python3
+"""abook-tg — отправка аудиокниг из личной библиотеки в свой Telegram-канал/группу (MTProto, Telethon).
+
+    abook-tg setup [--target]                          интерактивная настройка (api_id/hash, логин, выбор цели)
+    abook-tg send <id | автор/название> [--dry-run] [--force [--delete-old]] [--quality высокое|речь|маленький|оригинал]
+    abook-tg queue [N] [--profile ИМЯ] [--force] [--quality ...]
+    abook-tg status
+    abook-tg --help
+
+Почему не Bot API: у ботов лимит 50 МБ на файл, у пользовательского MTProto (Telethon) — 2 ГБ.
+Читает ~/abook/state.json и ~/abook/library.db только на чтение (другой инструмент их пишет).
+Секреты: ~/abook/telegram.json (api_id/api_hash/target + несекретный ключ "quality", chmod 600),
+сессия ~/abook/tg.session (chmod 600).
+Временные тома нарезки — /mnt/d/VideoDownloader/Аудиокниги/.tg-tmp (не в WSL, чтобы не растить vhdx).
+
+Сжатие по умолчанию (Telegram сам звук не сжимает): профиль «high» (высокое) — AAC 80 кбит/с, моно, 44.1 кГц,
+почти без потерь для речи из типичных ~128 кбит/с стерео источников (≈36 МБ/ч). «speech» (речь) — 64 кбит/с
+моно (≈28.8 МБ/ч). «small» (маленький) — 48 кбит/с моно. «original» (оригинал) — без перекодирования
+(stream copy), как раньше. Если исходник и так не хуже цели (битрейт ниже, уже моно) — перекодирование
+пропускается сама собой. Кодек — libfdk_aac, если собран в ffmpeg, иначе нативный aac (двухпроходный поиск).
+Книга уходит одним файлом; на тома режем только то, что не влезает в 1.9 ГБ (на практике — лишь «оригинал»
+очень длинных книг): минимально нужное число томов, срез по границе главы, если она рядом.
+"""
+import argparse
+import asyncio
+import difflib
+import json
+import math
+import os
+import re
+import shutil
+import sqlite3
+import stat
+import subprocess
+import sys
+import time
+import unicodedata
+from pathlib import Path
+
+HOME = Path.home() / "abook"
+STATE = HOME / "state.json"
+DB = HOME / "library.db"
+SECRETS_FILE = HOME / "telegram.json"
+SESSION_BASE = HOME / "tg"                 # -> tg.session
+SESSION_FILE = HOME / "tg.session"
+SENT_FILE = HOME / "tg-sent.json"
+TG_TMP = Path("/mnt/d/VideoDownloader/Аудиокниги/.tg-tmp")
+
+FFMPEG = shutil.which("ffmpeg") or str(Path.home() / ".local/bin/ffmpeg")
+FFPROBE = shutil.which("ffprobe") or str(Path.home() / ".local/bin/ffprobe")
+
+CAP_BYTES = int(1.9 * 1024 ** 3)           # жёсткий лимит MTProto на файл
+SAFETY_BYTES = int(CAP_BYTES * 0.97)       # запас на неточность оценки битрейта
+
+# профили сжатия: None = stream copy (как есть), иначе перекодируем каждый том в AAC при нарезке.
+# «высокое» — умолчание (минимальная потеря качества для речи из типичного источника ~128 кбит/с стерео).
+QUALITY_PROFILES = {
+    "original": None,
+    "high": {"bitrate_kbps": 80, "ac": 1, "ar": 44100},
+    "speech": {"bitrate_kbps": 64, "ac": 1, "ar": 44100},
+    "small": {"bitrate_kbps": 48, "ac": 1, "ar": 44100},
+}
+DEFAULT_QUALITY = "high"
+
+JSON_MODE = False   # --json-progress: на stdout только NDJSON-события (для review-приложения)
+
+
+def emit(event, **kw):
+    """В JSON-режиме — одна строка NDJSON на stdout; иначе no-op (обычные print делают своё дело)."""
+    if JSON_MODE:
+        print(json.dumps({"event": event, **kw}, ensure_ascii=False), flush=True)
+
+
+def die(msg, code=1):
+    if JSON_MODE:
+        emit("error", message=msg)
+    else:
+        print(msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def secure_write_json(path, data):
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.chmod(tmp, stat.S_IRUSR | stat.S_IWUSR)
+    tmp.replace(path)
+    os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+
+
+def load_json(path, default=None):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+# --------------------------------------------------------------------------- состояние библиотеки (только чтение)
+
+def load_state_items():
+    d = load_json(STATE, {}) or {}
+    return d.get("items", {}) if isinstance(d, dict) else {}
+
+
+def norm(s):
+    s = unicodedata.normalize("NFKC", str(s or "")).lower().replace("ё", "е")
+    return re.sub(r"[^\w]+", " ", s).strip()
+
+
+def find_item(query, items):
+    """Точный id или нечёткий поиск по id/автору/названию среди скачанных книг.
+    Возвращает (id, []) при однозначном совпадении, иначе (None, [список id-кандидатов])."""
+    ids = list(items)
+    if query in items:
+        return query, []
+    q = norm(query)
+    toks = q.split()
+
+    def hay(i):
+        it = items[i]
+        return norm(" ".join([i.replace("-", " "), it.get("author") or "", it.get("title") or ""]))
+
+    hits = [i for i in ids if all(t in hay(i) for t in toks)]
+    if not hits:
+        scored = sorted(((difflib.SequenceMatcher(None, q, hay(i)).ratio(), i) for i in ids), reverse=True)
+        hits = [i for r, i in scored[:8] if r > 0.35]
+    hits.sort(key=lambda i: (items[i].get("status") != "done", i))
+    if len(hits) == 1:
+        return hits[0], []
+    return None, hits
+
+
+def print_candidates(hits, items):
+    print("Не однозначно, уточните запрос. Кандидаты:", file=sys.stderr)
+    for i in hits:
+        it = items.get(i, {})
+        print(f"  {i}  —  {it.get('author', '')} — {it.get('title', '')}  [{it.get('status', '?')}]", file=sys.stderr)
+
+
+def resolve_item_or_die(query, items):
+    item_id, hits = find_item(query, items)
+    if item_id is None:
+        if not hits:
+            die(f"Ничего не найдено по запросу «{query}».")
+        print_candidates(hits, items)
+        sys.exit(2)
+    it = items[item_id]
+    if it.get("status") != "done":
+        die(f"«{item_id}» ещё не скачана (status={it.get('status')}), отправлять нечего.")
+    fp = it.get("final_path")
+    if not fp or not Path(fp).exists():
+        die(f"«{item_id}»: файл не найден по пути из state.json: {fp}")
+    return item_id, it
+
+
+# --------------------------------------------------------------------------- ffprobe
+
+def ffprobe_json(path):
+    r = subprocess.run(
+        [FFPROBE, "-v", "error", "-show_chapters", "-show_format", "-of", "json", str(path)],
+        capture_output=True, text=True, timeout=180,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"ffprobe: {r.stderr.strip()[-400:]}")
+    return json.loads(r.stdout or "{}")
+
+
+def probe_chapters(path):
+    d = ffprobe_json(path)
+    dur = float((d.get("format") or {}).get("duration") or 0)
+    chapters = []
+    for c in d.get("chapters") or []:
+        try:
+            chapters.append({"start": float(c["start_time"]), "end": float(c["end_time"]),
+                              "title": (c.get("tags") or {}).get("title") or ""})
+        except (KeyError, ValueError, TypeError):
+            pass
+    return dur, chapters
+
+
+def has_embedded_cover(path):
+    try:
+        r = subprocess.run(
+            [FFPROBE, "-v", "error", "-select_streams", "v", "-show_entries",
+             "stream=index:stream_disposition=attached_pic", "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        d = json.loads(r.stdout or "{}")
+        for s in d.get("streams") or []:
+            if (s.get("disposition") or {}).get("attached_pic") == 1:
+                return int(s["index"])
+    except Exception:
+        pass
+    return None
+
+
+def extract_cover(path, out_jpg, stream_index):
+    cmd = [FFMPEG, "-y", "-nostdin", "-i", str(path), "-map", f"0:{stream_index}",
+           "-frames:v", "1", str(out_jpg)]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    return r.returncode == 0 and Path(out_jpg).exists()
+
+
+def detect_source_audio(path):
+    """Битрейт/каналы/частота первой аудиодорожки — чтобы не перекодировать, если источник уже не хуже цели."""
+    try:
+        r = subprocess.run(
+            [FFPROBE, "-v", "error", "-select_streams", "a:0", "-show_entries",
+             "stream=bit_rate,channels,sample_rate", "-of", "json", str(path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        d = json.loads(r.stdout or "{}")
+        s = (d.get("streams") or [{}])[0]
+        br = s.get("bit_rate")
+        return {"bitrate_kbps": (int(br) / 1000 if br else None),
+                "channels": s.get("channels"), "sample_rate": s.get("sample_rate")}
+    except Exception:
+        return {"bitrate_kbps": None, "channels": None, "sample_rate": None}
+
+
+_ENCODER_CACHE = {}
+
+
+def best_aac_encoder():
+    """(имя_кодека, доп_флаги): libfdk_aac, если собран в ffmpeg, иначе нативный aac с двухпроходным поиском."""
+    if "enc" not in _ENCODER_CACHE:
+        try:
+            r = subprocess.run([FFMPEG, "-hide_banner", "-encoders"], capture_output=True, text=True, timeout=30)
+            has_fdk = "libfdk_aac" in (r.stdout or "")
+        except Exception:
+            has_fdk = False
+        _ENCODER_CACHE["enc"] = ("libfdk_aac", []) if has_fdk else ("aac", ["-aac_coder", "twoloop"])
+    return _ENCODER_CACHE["enc"]
+
+
+def pick_effective_profile(quality, source_info, orig_bps):
+    """(profile_или_None, bps_для_планирования). profile=None — stream copy: либо запрошен «оригинал»,
+    либо источник и так не хуже цели (битрейт ниже и уже моно/меньше каналов) — перекодировать незачем."""
+    if quality == "original":
+        return None, orig_bps
+    profile = QUALITY_PROFILES[quality]
+    sbr, sch = source_info.get("bitrate_kbps"), source_info.get("channels")
+    if sbr is not None and sch is not None and sbr <= profile["bitrate_kbps"] * 1.05 and sch <= profile["ac"]:
+        return None, orig_bps
+    return profile, profile["bitrate_kbps"] * 1000 / 8
+
+
+# --------------------------------------------------------------------------- план нарезки на тома
+
+def build_split_plan(duration_sec, size_bytes, chapters):
+    """Список томов [{'start','end'}]. Режем, только если файл не влезает в 1.9 ГБ: минимальное число
+    томов (каждый <= SAFETY_BYTES), срез по границе главы, если она рядом с целевой точкой, иначе по времени."""
+    if size_bytes <= CAP_BYTES or not duration_sec:
+        return [{"start": 0.0, "end": duration_sec}]
+
+    bps = size_bytes / duration_sec
+    n_vol = math.ceil(size_bytes / SAFETY_BYTES)
+    even_dur = duration_sec / n_vol
+
+    boundaries = [0.0]
+    chap_starts = sorted({c["start"] for c in chapters}) if chapters and len(chapters) >= 2 else []
+    snap_tolerance = min(even_dur * 0.25, 20 * 60)   # к главе снэпаем, только если это рядом с целевой точкой
+    for i in range(1, n_vol):
+        target_t = i * even_dur
+        nearest = min(chap_starts, key=lambda t: abs(t - target_t)) if chap_starts else target_t
+        pick = nearest if chap_starts and abs(nearest - target_t) <= snap_tolerance else target_t
+        if 0 < pick < duration_sec:
+            boundaries.append(pick)
+    boundaries = sorted(set(round(b, 3) for b in boundaries))
+    if boundaries[-1] != round(duration_sec, 3):
+        boundaries.append(duration_sec)
+
+    # если снэппинг к главе дал том больше лимита по размеру — дробим его по времени
+    out = []
+    for s, e in zip(boundaries, boundaries[1:]):
+        k = max(1, math.ceil((e - s) * bps / SAFETY_BYTES))
+        step = (e - s) / k
+        out += [{"start": s + j * step, "end": e if j == k - 1 else s + (j + 1) * step} for j in range(k)]
+    return out
+
+
+def fmt_hms(sec):
+    sec = max(0, int(round(sec)))
+    h, r = divmod(sec, 3600)
+    m, s = divmod(r, 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def fmt_gb(b):
+    return f"{b / 1024**3:.2f} ГБ"
+
+
+def print_plan(item_id, it, duration_sec, plan, bps, quality=DEFAULT_QUALITY, skipped=False):
+    if JSON_MODE:
+        emit("plan", item_id=item_id, title=it.get("title"), author=it.get("author"),
+             duration_sec=duration_sec, volumes=len(plan), quality=quality, reencode_skipped=skipped,
+             plan=[{"index": i, "start": v["start"], "end": v["end"],
+                    "bytes": round((v["end"] - v["start"]) * bps)} for i, v in enumerate(plan, 1)])
+        return
+    print(f"«{it.get('author', '')} — {it.get('title', '')}» ({item_id})")
+    orig_bytes = it.get("size_bytes") or 0
+    qname = {"original": "оригинал, без перекодирования", "high": "высокое, AAC 80 кбит/с моно",
+             "speech": "речь, AAC 64 кбит/с моно", "small": "маленький, AAC 48 кбит/с моно"}.get(quality, quality)
+    print(f"  длительность: {fmt_hms(duration_sec)}, качество: {qname}")
+    if skipped:
+        print("  источник уже не хуже цели по битрейту/каналам — перекодирование пропущено, отправится как есть.")
+    if quality != "original" and orig_bytes and not skipped:
+        print(f"  исходный файл: {fmt_gb(orig_bytes)} → после сжатия: ~{fmt_gb(duration_sec * bps)}")
+    else:
+        print(f"  размер файла: {fmt_gb(orig_bytes or duration_sec * bps)}")
+    if len(plan) == 1:
+        print("  дробить не нужно — уложится в один файл.")
+        return
+    print(f"  томов: {len(plan)}")
+    for i, v in enumerate(plan, 1):
+        vdur = v["end"] - v["start"]
+        vbytes = vdur * bps
+        print(f"  том {i}/{len(plan)}: {fmt_hms(v['start'])}–{fmt_hms(v['end'])} "
+              f"(~{vdur/3600:.2f} ч), ~{fmt_gb(vbytes)}")
+
+
+# --------------------------------------------------------------------------- хэштеги / подпись
+
+STOP_TAG_WORDS = {"рассказ", "рассказы", "сборник", "повесть", "роман", "полная", "версия", "обе", "книги"}
+
+
+def slug_tag(s):
+    s = unicodedata.normalize("NFKC", str(s or "")).strip()
+    s = re.sub(r"[^\w\s-]", "", s, flags=re.UNICODE)
+    s = re.sub(r"[\s-]+", "_", s).strip("_")
+    return s
+
+
+def build_hashtags(it, duration_sec):
+    tags = []
+
+    def add(raw):
+        t = slug_tag(raw)
+        if t and t.lower() not in STOP_TAG_WORDS and f"#{t}" not in tags:
+            tags.append(f"#{t}")
+
+    section = it.get("section") or ""
+    for part in re.split(r"[,/;]", section):
+        add(part)
+    author = it.get("author") or ""
+    surname = author.split()[-1] if author.split() else author
+    add(surname)
+    tags.append("#Короткое" if duration_sec < 2 * 3600 else "#Длинное")
+    return tags[:6]
+
+
+def build_caption(it, item_id, duration_sec, vol_idx=None, vol_n=None, vol_dur=None):
+    author = it.get("author") or ""
+    title = it.get("title") or item_id
+    narrator = it.get("narrator") or ""
+    section = it.get("section") or ""
+    about = it.get("about") or ""
+    lines = [f"{author} — {title}".strip(" —")]
+    if narrator:
+        lines.append(f"Читает: {narrator}")
+    dur_line = f"Длительность: {fmt_hms(duration_sec)}"
+    if vol_idx and vol_n and vol_n > 1:
+        dur_line += f" (эта часть: {fmt_hms(vol_dur)}, том {vol_idx}/{vol_n})"
+    lines.append(dur_line)
+    if section:
+        lines.append(f"Раздел: {section}")
+    if about:
+        lines.append(about)
+    tags = build_hashtags(it, duration_sec)
+    if tags:
+        lines.append(" ".join(tags))
+    caption = "\n".join(l for l in lines if l)
+    if len(caption) > 1024:
+        # обрезаем "о чём" по словам, остальное сохраняем
+        overflow = len(caption) - 1024
+        if about:
+            cut = max(0, len(about) - overflow - 1)
+            about2 = about[:cut].rsplit(" ", 1)[0] + "…" if cut > 0 else ""
+            lines = [l if l != about else about2 for l in lines]
+            caption = "\n".join(l for l in lines if l)
+        caption = caption[:1024]
+    return caption
+
+
+def vol_title(it, item_id, vol_idx, vol_n):
+    title = it.get("title") or item_id
+    if vol_n and vol_n > 1:
+        return f"{title} · часть {vol_idx}/{vol_n}"
+    return title
+
+
+# --------------------------------------------------------------------------- секреты / цель
+
+def load_secrets():
+    return load_json(SECRETS_FILE, {}) or {}
+
+
+def resolve_quality(requested):
+    """CLI-флаг > сохранённый в telegram.json ("quality", несекретный ключ) > "high" по умолчанию."""
+    q = requested or load_secrets().get("quality") or DEFAULT_QUALITY
+    if q not in QUALITY_PROFILES:
+        die(f"Неизвестный профиль качества «{q}» (доступны: {', '.join(QUALITY_PROFILES)})")
+    return q
+
+
+def require_secrets():
+    s = load_secrets()
+    if not s.get("api_id") or not s.get("api_hash"):
+        die("Нет данных API (~/abook/telegram.json). Запустите: abook-tg setup")
+    if not s.get("target"):
+        die("Не выбрана цель отправки. Запустите: abook-tg setup --target")
+    if not SESSION_FILE.exists():
+        die("Нет сессии (~/abook/tg.session). Запустите: abook-tg setup")
+    return s
+
+
+# --------------------------------------------------------------------------- журнал отправленного
+
+def load_sent():
+    return load_json(SENT_FILE, {"target": None, "items": {}}) or {"target": None, "items": {}}
+
+
+def save_sent(d):
+    secure_write_json(SENT_FILE, d)
+
+
+def item_sent_state(sent, item_id):
+    return (sent.get("items") or {}).get(item_id)
+
+
+def mark_volume_sent(sent, item_id, it, vol_idx, vol_n, message_id, nbytes, quality=None):
+    items = sent.setdefault("items", {})
+    rec = items.setdefault(item_id, {"title": it.get("title"), "author": it.get("author"), "volumes": []})
+    rec["volumes"] = [v for v in rec["volumes"] if v["index"] != vol_idx]
+    rec["volumes"].append({"index": vol_idx, "of": vol_n, "message_id": message_id,
+                            "bytes": nbytes, "sent_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+    rec["volumes"].sort(key=lambda v: v["index"])
+    rec["complete"] = len(rec["volumes"]) >= vol_n
+    if quality:
+        rec["quality"] = quality
+    rec["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    save_sent(sent)
+
+
+def already_sent_indices(sent, item_id):
+    rec = item_sent_state(sent, item_id)
+    if not rec:
+        return set()
+    return {v["index"] for v in rec.get("volumes", [])}
+
+
+# --------------------------------------------------------------------------- Telethon (импорт по требованию)
+
+def get_client():
+    from telethon import TelegramClient
+    s = require_secrets()
+    return TelegramClient(str(SESSION_BASE), int(s["api_id"]), s["api_hash"]), s
+
+
+async def cmd_setup(args):
+    from telethon import TelegramClient
+    from telethon.tl.types import Channel, Chat
+
+    secrets = load_secrets()
+
+    if not args.target_only:
+        print("Настройка Telegram (my.telegram.org → API development tools → создать приложение).")
+        api_id = secrets.get("api_id") or input("api_id: ").strip()
+        api_hash = secrets.get("api_hash") or input("api_hash: ").strip()
+        try:
+            api_id = int(api_id)
+        except ValueError:
+            die("api_id должен быть числом.")
+        secrets["api_id"] = api_id
+        secrets["api_hash"] = api_hash
+        secure_write_json(SECRETS_FILE, secrets)
+
+        phone = input("Номер телефона (с кодом страны, например +7...): ").strip()
+        client = TelegramClient(str(SESSION_BASE), api_id, api_hash)
+        await client.connect()
+        # client.start() сам спросит код и, если нужно, пароль 2ФА через input()/getpass()
+        await client.start(phone=phone)
+        print("Вход выполнен.")
+    else:
+        if not secrets.get("api_id") or not secrets.get("api_hash"):
+            die("Сначала полная настройка: abook-tg setup")
+        client = TelegramClient(str(SESSION_BASE), int(secrets["api_id"]), secrets["api_hash"])
+        await client.connect()
+        if not await client.is_user_authorized():
+            die("Сессия не авторизована. Запустите: abook-tg setup")
+
+    try:
+        os.chmod(SESSION_FILE, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:
+        pass
+
+    print("\nКуда вы можете постить (каналы/группы, где вы админ/создатель, и обычные группы):")
+    candidates = []
+    async for d in client.iter_dialogs():
+        ent = d.entity
+        ok = False
+        kind = ""
+        if isinstance(ent, Channel):
+            kind = "канал" if not ent.megagroup else "супергруппа"
+            if getattr(ent, "creator", False) or getattr(ent, "admin_rights", None):
+                ok = True
+        elif isinstance(ent, Chat):
+            kind = "группа"
+            if not getattr(ent, "left", False) and not getattr(ent, "deactivated", False):
+                ok = True
+        if ok:
+            candidates.append((d.id, d.name or d.title or str(d.id), kind))
+
+    if not candidates:
+        await client.disconnect()
+        die("Не нашлось ни одного канала/группы, куда можно постить.")
+
+    for i, (cid, name, kind) in enumerate(candidates, 1):
+        print(f"  {i}. [{kind}] {name}")
+
+    while True:
+        choice = input(f"Номер цели (1-{len(candidates)}): ").strip()
+        if choice.isdigit() and 1 <= int(choice) <= len(candidates):
+            cid, name, kind = candidates[int(choice) - 1]
+            break
+        print("Некорректный номер, попробуйте снова.")
+
+    secrets = load_secrets()
+    secrets["target"] = {"id": cid, "title": name}
+    secure_write_json(SECRETS_FILE, secrets)
+    print(f"Цель сохранена: {name}")
+    await client.disconnect()
+
+
+# --------------------------------------------------------------------------- нарезка на диске
+
+def cut_volume(src, start, end, out_path, is_last):
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [FFMPEG, "-y", "-nostdin", "-ss", f"{start:.3f}", "-i", str(src)]
+    if not is_last:
+        cmd += ["-t", f"{end - start:.3f}"]
+    cmd += ["-map", "0:a:0", "-c", "copy", str(out_path)]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
+    if r.returncode != 0 or not out_path.exists():
+        raise RuntimeError(f"ffmpeg (нарезка тома): {r.stderr.strip()[-500:]}")
+
+
+def encode_volume(src, start, end, out_path, is_last, profile, title=None, author=None, on_progress=None):
+    """Перекодировать том в AAC (nice 10), докладывая прогресс (0-100) через on_progress(pct)."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    vdur = end - start
+    enc_name, enc_extra = best_aac_encoder()
+    cmd = ["nice", "-n", "10", FFMPEG, "-y", "-nostdin", "-ss", f"{start:.3f}", "-i", str(src)]
+    if not is_last:
+        cmd += ["-t", f"{vdur:.3f}"]
+    cmd += ["-map", "0:a:0", "-c:a", enc_name] + enc_extra + ["-b:a", f"{profile['bitrate_kbps']}k",
+            "-ac", str(profile["ac"]), "-ar", str(profile["ar"]), "-movflags", "+faststart"]
+    if title:
+        cmd += ["-metadata", f"title={title}"]
+    if author:
+        cmd += ["-metadata", f"artist={author}"]
+    cmd += ["-progress", "pipe:1", "-nostats", "-loglevel", "error", str(out_path)]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+    try:
+        for line in proc.stdout:
+            line = line.strip()
+            if line.startswith("out_time_ms=") and vdur > 0 and on_progress:
+                try:
+                    sec = int(line.split("=", 1)[1]) / 1_000_000   # ffmpeg -progress: микросекунды, несмотря на имя
+                except ValueError:
+                    continue
+                on_progress(min(100.0, sec / vdur * 100))
+        rc = proc.wait(timeout=3600)
+    finally:
+        err = ""
+        try:
+            err = proc.stderr.read()
+        except Exception:
+            pass
+    if rc != 0 or not out_path.exists():
+        raise RuntimeError(f"ffmpeg (сжатие тома): {err.strip()[-500:]}")
+    if on_progress:
+        on_progress(100.0)
+
+
+class ProgressPrinter:
+    def __init__(self, label, index=None, of=None):
+        self.label = label
+        self.index = index
+        self.of = of
+        self.t0 = time.time()
+        self.last_print = 0
+
+    def __call__(self, current, total):
+        now = time.time()
+        if now - self.last_print < 0.5 and current < total:
+            return
+        self.last_print = now
+        pct = current / total * 100 if total else 0
+        elapsed = max(1e-6, now - self.t0)
+        mbps = (current / 1024 / 1024) / elapsed
+        if JSON_MODE:
+            emit("progress", index=self.index, of=self.of, pct=round(pct, 1), mbps=round(mbps, 2),
+                 bytes=current, total_bytes=total)
+            return
+        sys.stdout.write(f"\r  {self.label}: {pct:5.1f}%  {mbps:6.2f} МБ/с   ")
+        sys.stdout.flush()
+        if current >= total:
+            sys.stdout.write("\n")
+
+
+async def send_file_with_floodwait(client, entity, **kwargs):
+    from telethon.errors import FloodWaitError
+    while True:
+        try:
+            return await client.send_file(entity, **kwargs)
+        except FloodWaitError as e:
+            emit("floodwait", seconds=e.seconds)
+            if not JSON_MODE:
+                print(f"\n  FloodWait: жду {e.seconds} с…")
+            await asyncio.sleep(e.seconds + 1)
+
+
+def make_encode_progress(index, of):
+    state = {"last": 0.0}
+
+    def cb(pct):
+        now = time.time()
+        if now - state["last"] < 0.5 and pct < 100:
+            return
+        state["last"] = now
+        emit("encode_progress", index=index, of=of, pct=round(pct, 1))
+        if not JSON_MODE:
+            sys.stdout.write(f"\r  сжатие {index}/{of}: {pct:5.1f}%   ")
+            sys.stdout.flush()
+            if pct >= 100:
+                sys.stdout.write("\n")
+    return cb
+
+
+async def send_item(client, target_entity, item_id, it, sent, force=False, quality=DEFAULT_QUALITY):
+    src = Path(it["final_path"])
+    duration_sec = float(it.get("duration_sec") or 0)
+    size_bytes = it.get("size_bytes") or src.stat().st_size
+    ext = src.suffix or ".m4a"
+    orig_bps = size_bytes / duration_sec if duration_sec else 0
+    source_info = detect_source_audio(src)
+    profile, bps = pick_effective_profile(quality, source_info, orig_bps)
+
+    _, chapters = probe_chapters(src)
+    plan = build_split_plan(duration_sec, bps * duration_sec if duration_sec else size_bytes, chapters)
+    n_vol = len(plan)
+
+    if force:
+        # старые сообщения в канале не трогаем — запись о них уходит в "superseded" (для ручного удаления
+        # или `send --force --delete-old`); сводки/кнопки UI считают только "items"
+        old = sent.get("items", {}).pop(item_id, None)
+        if old and old.get("volumes"):
+            old["superseded_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+            old["target_id"] = (sent.get("target") or {}).get("id")
+            sent.setdefault("superseded", {}).setdefault(item_id, []).append(old)
+        save_sent(sent)
+    done_idx = already_sent_indices(sent, item_id)
+
+    cover_jpg = None
+    cover_idx = has_embedded_cover(src)
+    if cover_idx is not None:
+        cover_jpg = TG_TMP / f".cover-{item_id}.jpg"
+        if not extract_cover(src, cover_jpg, cover_idx):
+            cover_jpg = None
+
+    emit("plan", item_id=item_id, title=it.get("title"), author=it.get("author"), volumes=n_vol, quality=quality)
+    tmp_dir = TG_TMP / item_id
+    try:
+        for i, v in enumerate(plan, 1):
+            if i in done_idx:
+                emit("volume_skip", index=i, of=n_vol)
+                if not JSON_MODE:
+                    print(f"  том {i}/{n_vol}: уже отправлен, пропуск.")
+                continue
+            vdur = v["end"] - v["start"]
+            title = vol_title(it, item_id, i, n_vol)
+            emit("volume_start", index=i, of=n_vol, duration_sec=vdur, stage="encode" if profile else "copy")
+            if profile is None and n_vol == 1:
+                vol_path = src   # «оригинал», без дробления — шлём файл как есть
+            elif profile is None:
+                vol_path = tmp_dir / f"vol{i:02d}{ext}"
+                if not JSON_MODE:
+                    print(f"  нарезаю том {i}/{n_vol} ({fmt_hms(vdur)})…")
+                cut_volume(src, v["start"], v["end"], vol_path, is_last=(i == n_vol))
+            else:
+                vol_path = tmp_dir / f"vol{i:02d}.m4a"
+                if not JSON_MODE:
+                    print(f"  сжимаю том {i}/{n_vol} ({fmt_hms(vdur)}, {quality})…")
+                encode_volume(src, v["start"], v["end"], vol_path, is_last=(i == n_vol), profile=profile,
+                              title=title, author=it.get("author"), on_progress=make_encode_progress(i, n_vol))
+
+            caption = build_caption(it, item_id, duration_sec, i, n_vol, vdur)
+            from telethon.tl.types import DocumentAttributeAudio
+            attrs = [DocumentAttributeAudio(duration=int(round(vdur)), title=title,
+                                             performer=it.get("author") or "")]
+            progress = ProgressPrinter(f"том {i}/{n_vol}", index=i, of=n_vol)
+            msg = await send_file_with_floodwait(
+                client, target_entity, file=str(vol_path), caption=caption,
+                attributes=attrs, thumb=str(cover_jpg) if cover_jpg else None,
+                force_document=False, progress_callback=progress,
+            )
+            nbytes = vol_path.stat().st_size
+            mark_volume_sent(sent, item_id, it, i, n_vol, msg.id, nbytes, quality=quality)
+            emit("volume_done", index=i, of=n_vol, message_id=msg.id, bytes=nbytes)
+            if vol_path != src:
+                try:
+                    vol_path.unlink()
+                except OSError:
+                    pass
+    finally:
+        if cover_jpg and cover_jpg.exists():
+            try:
+                cover_jpg.unlink()
+            except OSError:
+                pass
+        if tmp_dir.exists():
+            try:
+                tmp_dir.rmdir()
+            except OSError:
+                pass
+    emit("book_done", item_id=item_id)
+
+
+async def delete_superseded(client, target_entity, sent, item_id):
+    """--delete-old: удалить из канала сообщения прежней отправки этой книги (только свои, только в той же цели).
+    Вызывается лишь после успешной полной переотправки; по умолчанию выключено и из UI не вызывается."""
+    tid = (sent.get("target") or {}).get("id")
+    olds = (sent.get("superseded") or {}).get(item_id) or []
+    ids = [v["message_id"] for rec in olds if not rec.get("deleted") and rec.get("target_id") in (None, tid)
+           for v in rec.get("volumes", []) if v.get("message_id")]
+    if not ids:
+        return
+    await client.delete_messages(target_entity, ids, revoke=True)
+    for rec in olds:
+        if rec.get("target_id") in (None, tid):
+            rec["deleted"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    save_sent(sent)
+    emit("old_deleted", item_id=item_id, message_ids=ids)
+    if not JSON_MODE:
+        print(f"  удалены старые сообщения: {', '.join(map(str, ids))}")
+
+
+async def cmd_send(args):
+    items = load_state_items()
+    item_id, it = resolve_item_or_die(args.query, items)
+    quality = resolve_quality(args.quality)
+
+    duration_sec = float(it.get("duration_sec") or 0)
+    size_bytes = it.get("size_bytes") or Path(it["final_path"]).stat().st_size
+    orig_bps = size_bytes / duration_sec if duration_sec else 0
+    source_info = detect_source_audio(Path(it["final_path"]))
+    profile, bps = pick_effective_profile(quality, source_info, orig_bps)
+    _, chapters = probe_chapters(Path(it["final_path"]))
+    plan = build_split_plan(duration_sec, bps * duration_sec if duration_sec else size_bytes, chapters)
+
+    if args.dry_run:
+        print_plan(item_id, it, duration_sec, plan, bps, quality, skipped=(quality != "original" and profile is None))
+        return
+
+    require_secrets()
+    sent = load_sent()
+    rec = item_sent_state(sent, item_id)
+    if rec and rec.get("complete") and not args.force:
+        emit("already_sent", item_id=item_id, volumes=len(rec["volumes"]))
+        if not JSON_MODE:
+            print(f"«{item_id}» уже полностью отправлена ({len(rec['volumes'])} том(ов)). --force для повторной отправки.")
+        return
+
+    client, secrets = get_client()
+    await client.connect()
+    if not await client.is_user_authorized():
+        die("Сессия не авторизована. Запустите: abook-tg setup")
+    target = secrets["target"]
+    entity = await client.get_entity(target["id"])
+    sent["target"] = target
+    print_plan(item_id, it, duration_sec, plan, bps, quality, skipped=(quality != "original" and profile is None))
+    await send_item(client, entity, item_id, it, sent, force=args.force, quality=quality)
+    if args.force and args.delete_old and (item_sent_state(sent, item_id) or {}).get("complete"):
+        await delete_superseded(client, entity, sent, item_id)
+    await client.disconnect()
+    if not JSON_MODE:
+        print("Готово.")
+
+
+async def cmd_queue(args):
+    quality = resolve_quality(args.quality)
+    if not DB.exists():
+        die(f"Не найдена база {DB}")
+    con = sqlite3.connect(str(DB))
+    cur = con.cursor()
+    cur.execute("select id from profiles where name=? or slug=?", (args.profile, args.profile))
+    row = cur.fetchone()
+    if not row:
+        die(f"Профиль «{args.profile}» не найден в library.db")
+    pid = row[0]
+    cur.execute("select item_id from queue where profile_id=? order by position asc", (pid,))
+    queue_ids = [r[0] for r in cur.fetchall()]
+    con.close()
+    if not queue_ids:
+        if not JSON_MODE:
+            print(f"Очередь профиля «{args.profile}» пуста.")
+        emit("queue_empty", profile=args.profile)
+        return
+
+    items = load_state_items()
+    sent = load_sent()
+
+    to_send = []
+    for qid in queue_ids:
+        it = items.get(qid)
+        if not it or it.get("status") != "done":
+            continue
+        rec = item_sent_state(sent, qid)
+        if rec and rec.get("complete") and not args.force:
+            continue
+        to_send.append(qid)
+        if len(to_send) >= args.n:
+            break
+
+    if not to_send:
+        if not JSON_MODE:
+            print("Нечего отправлять (всё из очереди уже отправлено или не скачано).")
+        emit("queue_nothing_to_send")
+        return
+
+    require_secrets()
+    client, secrets = get_client()
+    await client.connect()
+    if not await client.is_user_authorized():
+        die("Сессия не авторизована. Запустите: abook-tg setup")
+    target = secrets["target"]
+    entity = await client.get_entity(target["id"])
+    sent["target"] = target
+
+    emit("queue_start", items=to_send)
+    for qid in to_send:
+        it = items[qid]
+        if not JSON_MODE:
+            print(f"\n=== {it.get('author', '')} — {it.get('title', '')} ({qid}) ===")
+        await send_item(client, entity, qid, it, sent, force=args.force, quality=quality)
+
+    await client.disconnect()
+    if not JSON_MODE:
+        print("\nГотово.")
+
+
+def cmd_status(args):
+    secrets = load_secrets()
+    sent = load_sent()
+    target = secrets.get("target") or sent.get("target")
+    print(f"Цель: {target['title']} (id {target['id']})" if target else "Цель: не настроена (abook-tg setup --target)")
+    items = sent.get("items", {})
+    books_done = sum(1 for r in items.values() if r.get("complete"))
+    vols = sum(len(r.get("volumes", [])) for r in items.values())
+    total_bytes = sum(v.get("bytes", 0) for r in items.values() for v in r.get("volumes", []))
+    print(f"Отправлено книг (полностью): {books_done} из {len(items)} начатых")
+    print(f"Отправлено томов: {vols}")
+    print(f"Отправлено данных: {fmt_gb(total_bytes)}")
+
+
+# --------------------------------------------------------------------------- CLI
+
+def build_argparser():
+    p = argparse.ArgumentParser(prog="abook-tg", description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sp = sub.add_parser("setup", help="настройка API/логина/цели")
+    sp.add_argument("--target", dest="target_only", action="store_true", help="только сменить цель отправки")
+
+    sp = sub.add_parser("send", help="отправить одну книгу")
+    sp.add_argument("query", help="id книги или запрос автор/название")
+    sp.add_argument("--dry-run", action="store_true", help="только показать план нарезки, не отправлять")
+    sp.add_argument("--force", action="store_true", help="отправить заново, даже если уже отправлено "
+                    "(старые сообщения остаются в канале, их id — в tg-sent.json → superseded)")
+    sp.add_argument("--delete-old", action="store_true",
+                    help="вместе с --force: после успешной переотправки удалить старые сообщения этой книги из канала")
+    sp.add_argument("--quality", choices=list(QUALITY_PROFILES),
+                    help="high (по умолч., AAC 80k моно) | speech (64k) | small (48k) | original (без перекодирования)")
+    sp.add_argument("--json-progress", action="store_true",
+                    help="печатать прогресс построчным JSON на stdout (для интеграции)")
+
+    sp = sub.add_parser("queue", help="отправить N книг из очереди приложения отзывов")
+    sp.add_argument("n", nargs="?", type=int, default=3, help="сколько книг отправить (по умолчанию 3)")
+    sp.add_argument("--profile", default="Основной", help="имя профиля (по умолчанию «Основной»)")
+    sp.add_argument("--force", action="store_true")
+    sp.add_argument("--quality", choices=list(QUALITY_PROFILES))
+    sp.add_argument("--json-progress", action="store_true")
+
+    sub.add_parser("status", help="цель, сколько отправлено")
+    return p
+
+
+def main():
+    global JSON_MODE
+    p = build_argparser()
+    args = p.parse_args()
+    JSON_MODE = bool(getattr(args, "json_progress", False))
+    try:
+        if args.cmd == "setup":
+            asyncio.run(cmd_setup(args))
+        elif args.cmd == "send":
+            asyncio.run(cmd_send(args))
+        elif args.cmd == "queue":
+            asyncio.run(cmd_queue(args))
+        elif args.cmd == "status":
+            cmd_status(args)
+    except SystemExit:
+        raise
+    except Exception as ex:
+        if JSON_MODE:
+            emit("error", message=f"{type(ex).__name__}: {ex}")
+            sys.exit(1)
+        raise
+
+
+if __name__ == "__main__":
+    main()

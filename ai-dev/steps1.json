@@ -1,0 +1,136 @@
+[
+{
+"size": [
+1360,
+900
+],
+"nav": "http://127.0.0.1:8795/",
+"wait": 2500
+},
+{
+"eval": "localStorage.setItem('abook.profile','2');1"
+},
+{
+"nav": "http://127.0.0.1:8795/?r=1#anketa",
+"wait": 3000
+},
+{
+"shot": "r-result.png",
+"full": true
+},
+{
+"eval": "QMODE='form';QSTEP=0;QA.touched=true;renderAnketa();document.title",
+"wait": 800
+},
+{
+"shot": "q1-books.png",
+"full": true
+},
+{
+"eval": "goStep(2)",
+"wait": 800
+},
+{
+"shot": "q3-prefs.png",
+"full": true
+},
+{
+"eval": "goStep(3)",
+"wait": 800
+},
+{
+"shot": "q4-films.png",
+"full": true
+},
+{
+"eval": "goStep(5)",
+"wait": 800
+},
+{
+"shot": "q6-travel.png",
+"full": true
+},
+{
+"eval": "goStep(7)",
+"wait": 800
+},
+{
+"shot": "q8-about.png",
+"full": true
+},
+{
+"eval": "goStep(8)",
+"wait": 800
+},
+{
+"shot": "q9-worldview.png",
+"full": true
+},
+{
+"eval": "goStep(9)",
+"wait": 1200
+},
+{
+"shot": "q10-summary.png",
+"full": true
+},
+{
+"eval": "show('next')",
+"wait": 1500
+},
+{
+"shot": "next.png"
+},
+{
+"eval": "openMenu()",
+"wait": 500
+},
+{
+"shot": "menu.png"
+},
+{
+"eval": "closeMenu();deleteDlg()",
+"wait": 500
+},
+{
+"shot": "delete.png"
+},
+{
+"eval": "dlgClose();post('/api/profiles',{op:'create',name:'Тест Новый'}).then(j=>{PROFS=j.profiles;return switchProfile(j.created)}).then(()=>VIEW)",
+"wait": 2000
+},
+{
+"shot": "new-onboarding.png"
+},
+{
+"eval": "(()=>{const i=document.querySelector('.qsearch input');i.value='кафк';i.dispatchEvent(new Event('input'));return 1})()",
+"wait": 1500
+},
+{
+"shot": "new-search.png"
+},
+{
+"eval": "(()=>{const i=document.querySelector('.qsearch input');i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));i.value='Сергей Довлатов — Заповедник';i.dispatchEvent(new Event('input'));return 1})()",
+"wait": 1200
+},
+{
+"eval": "(()=>{const i=document.querySelector('.qsearch input');i.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowUp'}));i.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter'}));document.querySelector('.qent .chip').click();return document.querySelectorAll('.qent').length})()",
+"wait": 1500
+},
+{
+"shot": "new-added.png",
+"full": true
+},
+{
+"size": [
+420,
+860
+],
+"eval": "switchProfile(2).then(()=>{QMODE='form';QSTEP=0;renderAnketa()})",
+"wait": 1500
+},
+{
+"shot": "mobile-books.png",
+"full": true
+}
+]

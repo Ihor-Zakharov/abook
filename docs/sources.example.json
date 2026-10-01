@@ -1,0 +1,331 @@
+{
+  "_about": "Источники «Каталога источников» (abook_catalog.py). youtube: каналы, краулятся yt-dlp по вкладкам tabs; reader — чтец по умолчанию (если в заголовке не указан); ttl_days — как часто обновлять. manifests: готовые манифесты, импортируются без сети. sites: поиск на лету с кэшем.",
+  "youtube": [
+    {
+      "id": "buldakov",
+      "name": "Олег Булдаков | BLACKWOOD",
+      "handle": "@ОлегБулдаков-ы5ш",
+      "url": "https://www.youtube.com/channel/UC67qJmazjlqYCfGIiAVVXRQ",
+      "reader": "Олег Булдаков",
+      "lang": "ru",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 3
+    },
+    {
+      "id": "sharkov",
+      "name": "Шарков - Аудіокниги Українською",
+      "handle": "@Sharkov0202",
+      "url": "https://www.youtube.com/channel/UCBXu2JI9xvaDdBAYcA20D4g",
+      "reader": "Шарков",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 3
+    },
+    {
+      "id": "kalidor",
+      "name": "Аудіокниги Українською - Студія КАЛІДОР",
+      "handle": "@-Kalidor",
+      "url": "https://www.youtube.com/channel/UCTBfAXuNphu7OJNPJJfNu2g",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "harakternyk",
+      "name": "Аудіокниги українською від Характерника",
+      "handle": "@audiobooksua",
+      "url": "https://www.youtube.com/channel/UC65Za4AXhxgh8jnKiKanvhg",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "knyhomandry",
+      "name": "Книгомандри. Аудіокниги українською💙💛",
+      "handle": "@knygomandry",
+      "url": "https://www.youtube.com/channel/UCo8FJBuQeVpu8E477bO7ZWg",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "lit-shedevry",
+      "name": "Літературні шедеври – аудіокниги українською",
+      "handle": "@LiteraryMasterpiecesWithYou",
+      "url": "https://www.youtube.com/channel/UCJJqrVeggWSpEYrA4Z9SmZg",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "na-kanapi",
+      "name": "На канапі - Аудіокниги українською!",
+      "handle": "@На_канапі",
+      "url": "https://www.youtube.com/channel/UC_3x2Tping4Jd04SSpsDv7g",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "booka-radio",
+      "name": "Booka Radio - Аудіокниги українською",
+      "handle": "@bookaradio",
+      "url": "https://www.youtube.com/channel/UCuRVJmztU0fK8In4BlVkSOg",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "golos-foliantu",
+      "name": "ГОЛОС ФОЛІАНТУ - аудіокниги українською",
+      "handle": "@foliantvoice",
+      "url": "https://www.youtube.com/channel/UCS57txTc99JvgWmMXjCYOJA",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "audiochytalka",
+      "name": "АУДІОЧИТАЛКА",
+      "handle": "@audiobook_ukraine",
+      "url": "https://www.youtube.com/channel/UC6ysIt0HUJ09UeBVsM0Y89A",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "sushko",
+      "name": "Цікаві аудіокниги українською. Читає Юрій Сушко",
+      "handle": "@UAaudioknuga",
+      "url": "https://www.youtube.com/channel/UCdiZr600iTX5p-eUmmnBr7w",
+      "reader": "Юрій Сушко",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "ua-klasyka",
+      "name": "📚АУДІОКНИГИ УКРАЇНСЬКОЮ: КЛАСИКА",
+      "handle": "@ukrclassika",
+      "url": "https://www.youtube.com/channel/UCB9hGP5_QsLUg8a_HKfnGaQ",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "ptashka",
+      "name": "Пташка. Аудіокниги українською.",
+      "handle": "@Ptashka.Audioknigi_ukrainskoyu",
+      "url": "https://www.youtube.com/channel/UCCkmtJJzIf1i8WSAIgolLGA",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "chas-dlia-sebe",
+      "name": "Час для Себе",
+      "handle": "@ЧасдляСебе-э1э",
+      "url": "https://www.youtube.com/channel/UC-sGqYmkES5v3JxbOHhId9w",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "knyhy-solovinoiu",
+      "name": "Книги Солов'їною - Аудіокниги Українською",
+      "handle": "@knugu_solov-inoiy",
+      "url": "https://www.youtube.com/channel/UCd_6nj0x0Ttmg2yK9ui_I7Q",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "audioslovo",
+      "name": "AudioSlovo",
+      "handle": "@audioslovo",
+      "url": "https://www.youtube.com/channel/UCsiC0vzo7r-rbOB7D0Ej2rA",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "oliinyk",
+      "name": "Аудіовсесвіт Тетяни Олійник. Книги українською",
+      "handle": "@tetiana_oliynik_audiobook",
+      "url": "https://www.youtube.com/channel/UCjtD6vPTrB9YHSXeyGjf1_A",
+      "reader": "Тетяна Олійник",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "bukinhed",
+      "name": "БУКИНХЕД",
+      "handle": "@БУКИНХЕД",
+      "url": "https://www.youtube.com/channel/UCuTV6CT40ED-6BjVqbw8IPw",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "avtorski-opovidannia",
+      "name": "Авторські Оповідання Українською",
+      "handle": "@AvtorskiOpovidannyaUkrainskoyu",
+      "url": "https://www.youtube.com/channel/UCYh85OJBric6fwD99gvI67w",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "perlyny-klasyky",
+      "name": "АУДІОКНИГИ: ПЕРЛИНИ КЛАСИКИ",
+      "handle": "@ukrclassika2",
+      "url": "https://www.youtube.com/channel/UCmpBYOtkH4AzrpE53LYwlyg",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "rozumna-biblioteka",
+      "name": "Розумна Бібліотека",
+      "handle": "@smart_library",
+      "url": "https://www.youtube.com/channel/UCj_aRotYRcehgv0bBmzJfJw",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    },
+    {
+      "id": "syla-klasyky",
+      "name": "СИЛА КЛАСИКИ",
+      "handle": "@sylaklasyky",
+      "url": "https://www.youtube.com/channel/UCsEB1sTcIYlLzI5fi7qT56w",
+      "reader": "",
+      "lang": "uk",
+      "tabs": [
+        "videos",
+        "playlists"
+      ],
+      "ttl_days": 7,
+      "note": "украинский канал, добавлен 01.10 (полные книги, members ≤ 20 %)"
+    }
+  ],
+  "manifests": [
+    {
+      "id": "manifest:F-buldakov",
+      "path": "manifests/F-buldakov.json",
+      "platform": "YouTube",
+      "channel": "Олег Булдаков | BLACKWOOD"
+    }
+  ],
+  "sites": {
+    "knigavuhe": {
+      "ttl_days": 14
+    },
+    "akniga": {
+      "ttl_days": 14
+    },
+    "4read": {
+      "crawl_ttl_days": 3,
+      "note": "4read.org — украинские аудиокниги, обход по sitemap (crawl_4read)"
+    }
+  }
+}
