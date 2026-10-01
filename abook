@@ -5010,6 +5010,7 @@ h2.vt{margin:0;font:700 clamp(26px,2.6vw,34px)/1.1 var(--font-display);letter-sp
 /* the open card fills the screen height on desktop and the impressions field takes the free space: a review needs no scroll.
    Quotes, added on demand, are the one thing that may make the page longer */
 .main:has(>#v-rate:not(.home):not([hidden])){padding-bottom:20px}
+.main:has(>#v-rate.home:not([hidden])){padding-bottom:0}#v-rate.home .quick:has(>#rateQuick:empty){display:none}   /* главная без прокрутки, пока ничего не ввели */
 .main>#v-rate:not(.home){padding-top:20px;min-height:calc(100dvh - 40px)}
 #v-rate:not(.home)>.bookcard{flex:1 0 auto;margin-top:0}
 @media (min-width:761px){.bookcard .cd-text{flex:1 1 auto;display:flex;flex-direction:column;min-height:120px}
@@ -5301,7 +5302,9 @@ td.path code{font-size:12px;color:var(--ink-3);word-break:break-all;background:n
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 /*AI:CSS*/
-/*FIND:CSS*/</style></head>
+/*FIND:CSS*/
+.sthint.stload{display:flex;flex-direction:column;align-items:center;gap:12px;width:min(440px,100%);margin:clamp(40px,18vh,180px) auto 0;text-align:center}.sthint.stload .meter{width:100%}
+</style></head>
 <body>
 <div class="cosmos-wrap" id="cosmos-wrap" aria-hidden="true">
   <canvas class="cosmos" id="cosmos"></canvas>
@@ -6029,7 +6032,7 @@ const stHint=(text,go,label)=>`<div class="sthint"><span>${text}</span>${go?`<bu
 const stSec=(t,sub)=>`<div class="sts"><h3>${esc(t)}</h3>${sub?`<p class="sub">${sub}</p>`:''}</div>`;
 const chips=(a,c)=>a.length?`<ul class="stlist ${c}">${a.map(t=>`<li>${esc(t)}</li>`).join('')}</ul>`:'';
 
-async function loadStats(){if(!$('#stBox').childElementCount)$('#stBox').innerHTML='<div class="sthint"><span>Считаю статистику по базе…</span><div class="meter indet"><div class="meter-fill"></div><div class="meter-glow"></div></div></div>';
+async function loadStats(){if(!$('#stBox').childElementCount)$('#stBox').innerHTML='<div class="sthint stload"><span>Считаю статистику по базе…</span><div class="meter indet"><div class="meter-fill"></div><div class="meter-glow"></div></div></div>';
   try{const [s,o]=await Promise.all([api('/api/stats/full'),api('/api/stats')]);const box=$('#stBox');STC=[];
   const L=s.library,T=s.taste,C=s.catalog,A=s.advice,ai=A.ai||{},cost=A.cost||{all:{},week:{}};
   // ---- KPI row: the one-line answer to «что здесь есть» ----

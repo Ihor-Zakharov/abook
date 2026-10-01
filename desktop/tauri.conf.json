@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Аудиотека",
+  "mainBinaryName": "Аудиотека",
+  "version": "0.1.0",
+  "identifier": "local.abook.audioteka",
+  "build": { "frontendDist": "splash" },
+  "app": {
+    "windows": [],
+    "security": { "csp": null },
+    "withGlobalTauri": false
+  },
+  "bundle": { "active": false, "icon": ["icons/icon.ico", "icons/icon.png"] }
+}

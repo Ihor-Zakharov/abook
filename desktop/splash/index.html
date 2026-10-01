@@ -1,0 +1,10 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Аудиотека</title><style>
+html,body{margin:0;height:100%;background:#000;color:#cfd3dc;font:15px/1.5 "Segoe UI",system-ui,sans-serif;overflow:hidden}
+body{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px}
+.m{width:120px;height:120px;border-radius:50%;background:radial-gradient(#0b0b0d 55%,#26272b 66%,#9a9da5 70%);
+box-shadow:0 0 0 3px #fff,0 0 22px 6px rgba(238,242,251,.55),0 0 70px 18px rgba(227,233,247,.14);animation:p 2.4s ease-in-out infinite}
+@keyframes p{50%{box-shadow:0 0 0 3px #fff,0 0 30px 9px rgba(238,242,251,.7),0 0 90px 26px rgba(227,233,247,.2)}}
+#t{letter-spacing:.04em}#h{margin-top:-20px;font-size:13px;color:#6f7480}#r{display:none;padding:9px 22px;border-radius:10px;border:1px solid #3a3d44;color:#e6e8ee;text-decoration:none;background:#121317}#r:hover{background:#1b1c21}html{user-select:none}#e{display:none;max-width:560px;text-align:center;color:#e8b4b4;white-space:pre-wrap}
+</style></head><body><div class="m"></div><div id="t">Запускаю аудиотеку…</div><div id="h">первый запуск после включения ПК — до минуты</div><div id="e"></div><a id="r" href="https://abook-desktop.invalid/retry">Повторить</a>
+<script>addEventListener("contextmenu",function(e){e.preventDefault()});window.abookError=function(m){document.getElementById('t').textContent='Не удалось запустить аудиотеку';var e=document.getElementById('e');e.textContent=m;e.style.display='block';document.getElementById('h').style.display='none';document.getElementById('r').style.display='inline-block';document.querySelector('.m').style.animation='none'}</script>
+</body></html>

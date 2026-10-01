@@ -44,7 +44,7 @@ CSS = r'''
 .qdot .l{white-space:nowrap}
 @media (hover:hover){.qdot:hover{color:var(--ink);background:var(--surface)}}
 .qdot.on{color:var(--ink);background:var(--surface-2);border-color:var(--line-2)}.qdot.on .n{box-shadow:inset 0 0 0 1.5px var(--ink);color:var(--ink)}
-.qdot.on.done .n{box-shadow:none}
+.qdot.on.done .n{box-shadow:none;color:var(--bg)}
 @media (max-width:1100px){.qdot:not(.on) .l{display:none}.qdot:not(.on){padding:0 7px}}
 @media (max-width:760px){.qdots{gap:4px}.qdots .qsep{min-width:4px}.qdot:not(.on){padding:0;border-width:0}.qdot{height:34px}.qdot.on{padding:0 10px 0 5px}}
 .qcard{background:linear-gradient(180deg,rgba(255,226,180,.035),transparent 36%),var(--plate);border:1px solid var(--line-2);border-radius:var(--r-xl);padding:26px 26px 24px;display:flex;flex-direction:column;gap:6px}

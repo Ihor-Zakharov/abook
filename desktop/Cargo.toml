@@ -1,0 +1,19 @@
+[package]
+name = "audioteka"
+version = "0.1.0"
+edition = "2021"
+description = "Аудиотека — десктоп-оболочка abook (Tauri 2 + WebView2)"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", default-features = false, features = ["wry", "compression"] }
+tauri-plugin-window-state = "2"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

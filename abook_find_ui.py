@@ -13,13 +13,15 @@ CSS = r'''
 .fdhint{text-align:center;min-height:21px;font-size:13px}
 .fdres{display:flex;flex-direction:column;gap:14px}
 /* мгновенная выдача: три группы строк одной высоты — ничего не прыгает при вводе, строки обновляются на месте */
-.fdlive{padding:14px 10px 12px;gap:12px}
+.fdlive{padding:18px 24px 16px;gap:14px}
 .fdgrp{display:flex;flex-direction:column;gap:2px;min-width:0}
-.fdgh{display:flex;align-items:baseline;gap:10px;padding:0 12px 6px}.fdgh h3{margin:0;font:600 14px/1.4 var(--font-text);color:var(--ink-2)}
+.fdgh{display:flex;align-items:baseline;gap:10px;padding:0 16px 6px}.fdgh h3{margin:0;font:600 14px/1.4 var(--font-text);color:var(--ink-2)}
 .fdgh .sub{font-size:13px}.fdgh .ms{margin-left:auto;font:500 13px/1 var(--font-mono);color:var(--ink-3);font-variant-numeric:tabular-nums}
 .fdit{display:flex;flex-direction:column;min-width:0}
-.fdrow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:22px 19px;column-gap:16px;row-gap:2px;align-items:center;height:60px;padding:0 12px;border-radius:var(--r-m);cursor:pointer;min-width:0;transition:background-color var(--t-fast),box-shadow var(--t-fast)}
-.fdrow:hover{background:var(--s1)}.fdrow.sel{background:var(--s3)}
+.fdrow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-rows:22px 19px;column-gap:16px;row-gap:2px;align-items:center;height:62px;padding:0 16px;align-content:center;border-radius:var(--r-m);cursor:pointer;min-width:0;transition:background-color var(--t-fast),box-shadow var(--t-fast)}
+.fdrow:hover{background:var(--s1)}.fdrow.sel{background:var(--s3);box-shadow:inset 0 0 0 1px var(--line-2)}
+.fdrow .a{align-self:center}
+.fdsrc-a{color:var(--ink);text-decoration:underline;text-decoration-color:var(--line-3);text-underline-offset:3px}.fdsrc-a:hover{text-decoration-color:var(--ink-2)}
 .fdrow .t{display:flex;align-items:center;gap:8px;min-width:0;font:600 15px/22px var(--font-text);color:var(--ink)}
 .fdrow .t .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .fdrow .t mark{background:none;color:var(--ink);box-shadow:inset 0 -1px 0 var(--line-3)}
@@ -30,9 +32,9 @@ CSS = r'''
 .fdn{height:24px;padding:0 8px;border-radius:var(--r-xs);box-shadow:inset 0 0 0 1px var(--line-1);font:500 13px/1 var(--font-mono);color:var(--ink-3);white-space:nowrap;flex:none}
 .fdn:hover,.fdit.open .fdn{color:var(--ink);box-shadow:inset 0 0 0 1px var(--line-3)}
 .fdrecl{display:none;flex-direction:column;gap:3px;padding:3px 0 8px 28px}.fdit.open .fdrecl{display:flex}
-.fdrec{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:16px;align-items:center;height:40px;padding:0 12px;border-radius:var(--r-s);background:var(--s1)}
+.fdrec{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:16px;align-items:center;height:40px;padding:0 16px;border-radius:var(--r-s);background:var(--s1)}
 .fdrec.best .m{color:var(--ink)}
-.fdact{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px 0;border-top:1px solid var(--line-1)}
+.fdact{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px 0;border-top:1px solid var(--line-1)}
 .fdact .tx{font-size:14.5px;color:var(--ink-2)}.fdact .note{margin-left:auto;font-size:13px;color:var(--ink-3)}
 .fdqplate{padding:14px 16px;gap:10px}.fdqplate .fdqi{padding:8px 12px}
 .fdplate{background:linear-gradient(180deg,rgba(255,255,255,.02),transparent 40%),var(--plate);border:1px solid var(--line-2);border-radius:var(--r-xl);padding:20px 22px;display:flex;flex-direction:column;gap:14px;min-width:0}
@@ -90,7 +92,7 @@ details>summary.fdsum{cursor:pointer;font-size:13px;color:var(--ink-3);list-styl
 .fdtop h2{margin:0;flex:0 1 auto;font:600 16px/1.3 var(--font-text);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .fdtop .seg,.fdtop .switch{flex:none}.fdtop .spacer{flex:1 0 8px}
 .fdtop .sub{flex:0 1 auto;min-width:0;max-width:38%;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fdmsgs{flex:1;min-height:0;overflow:auto;scroll-behavior:smooth}
+.fdmsgs{flex:1;min-height:0;overflow:auto}
 .fdcol{width:min(880px,100%);margin:0 auto;padding:12px 24px 24px;display:flex;flex-direction:column;gap:22px}
 .fdempty{display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center;padding-top:clamp(40px,18vh,200px)}
 .fdempty h3{margin:0;font:600 30px/1.2 var(--font-display);letter-spacing:-.02em;color:var(--ink)}
@@ -269,7 +271,7 @@ const FD_KIND={audiobook:'аудиокнига',radioplay:'радиоспект�
 let FDCS=null;   // счётчики каталога — один раз, для подзаголовка
 function loadFind(){fdPoll(true);api('/api/find/memory').then(j=>fdPaintMem(j.memory||[])).catch(()=>{});
   api('/api/find/vec/status').then(j=>{const d=j.daemon||{},sub=$('#fdGSem .sub');sub.textContent=!j.enabled?'векторы выключены':d.todo?'не по буквам, а по близости · индекс ещё строится: '+(d.n||0)+' из '+((d.n||0)+d.todo):'не по буквам, а по близости: аннотации и признаки'}).catch(()=>{});
-  if(!FDCS)api('/api/find/catalog/status').then(j=>{FDCS=j;const k=n=>n>=1000?Math.round(n/1000)+' тыс.':String(n);if(j.works)$('#fdSub').textContent='Библиотека и '+k(j.works)+' книг из интернета: слушайте онлайн или скачивайте';
+  if(!FDCS)api('/api/find/catalog/status').then(j=>{FDCS=j;const k=n=>n>=1000?Math.round(n/1000)+' тыс.':String(n);if(j.works)$('#fdSub').textContent='Библиотека и '+k(j.works)+' книг из интернета: слушайте онлайн или скачивайте';}).catch(()=>{});
   if(!FDWARM){FDWARM=true;for(const u of ['/api/search?q=книга','/api/find/catalog?group=work&limit=1&q=книга'])api(u).catch(()=>{})}   // прогрев индексов: первый запрос без холодного старта
   setTimeout(()=>{if(VIEW==='find'&&!typing())fdFocus()},60)}
 let FDWARM=false;
@@ -342,21 +344,26 @@ function fdRowEl(r){const wrap=el('div','fdit');wrap.dataset.key=r.key;const row
   else if(r.kind==='work'){const w=r.w,best=w.records[0];n.appendChild(hl(fdClean((w.author?w.author+' — ':'')+w.title),FDL.q));
     if(w.in_library)t.appendChild(el('span','badge','в библиотеке'));
     const nb=el('button','fdn',fdPl(w.records.length,'запись','записи','записей')+' ▾');nb.type='button';nb.title='Показать все записи этой книги';nb.setAttribute('aria-expanded','false');nb.onclick=e=>{e.stopPropagation();fdToggleRecs(r)};t.appendChild(nb);
-    m.textContent=[w.genre,(w.langs||[]).join('/'),best?fdRecLine(best):''].filter(Boolean).join(' · ');if(best&&(best.flags||[]).length)m.title=best.flags.join(' · ');
+    fdMeta(m,[w.genre,(w.langs||[]).join('/'),...(best?fdRecParts(best):[])],best);if(best&&(best.flags||[]).length)m.title=best.flags.join(' · ');
     if(best)fdSrcActs(a,{key:best.key,url:best.link||best.url,platform:best.platform,author:w.author,title:w.title,downloadable:best.downloadable,item_id:w.in_library});
     wrap.appendChild(el('div','fdrecl'));row.onclick=()=>{sel();fdToggleRecs(r)}}
   else{const s=r.s;n.appendChild(hl(fdClean((s.author?s.author+' — ':'')+s.title),FDL.q));t.appendChild(el('span','badge no',s.platform||'каталог'));
-    m.textContent=[s.reader,s.hours!=null?fmtH(s.hours):'',s.channel&&s.channel!==s.platform?s.channel:'',s.lang,s.downloadable?'':'только ссылка'].filter(Boolean).join(' · ')||'запись каталога';
+    fdMeta(m,[s.platform,s.reader,s.hours!=null?fmtH(s.hours):'',s.channel&&s.channel!==s.platform?s.channel:'',s.lang,s.downloadable?'':'только ссылка'],{platform:s.platform,url:s.url});
     fdSrcActs(a,{key:s.src_key,url:s.url,platform:s.platform,author:s.author,title:s.title,downloadable:s.downloadable});row.onclick=sel}
   return wrap}
 const fdComp=x=>x.complete_score==null?'':x.complete_score>=.9?'полная':'неполная';
 const fdClean=t=>String(t||'').replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu,'').replace(/^[\s#|•·\-–—\[\]()]+/u,'').trim();
+// мета-строка с площадкой-ссылкой: видно, откуда запись, и можно открыть её у источника
+function fdMeta(m,parts,x){m.textContent='';const pl=x&&x.platform,url=x&&(x.link||x.url);parts.filter(Boolean).forEach((p,i)=>{if(i)m.appendChild(document.createTextNode(' · '));
+    if(pl&&url&&p===pl){const a=el('a','fdsrc-a',pl+' ↗');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.title='Открыть запись у источника: '+url;a.onclick=e=>e.stopPropagation();a.onmousedown=e=>e.stopPropagation();m.appendChild(a)}
+    else m.appendChild(document.createTextNode(p))})}
+const fdRecParts=x=>[x.platform,x.narrator||'',fdH(x.duration),x.parts>1?fdPl(x.parts,'часть','части','частей'):'',fdComp(x),x.verified?'✓ проверено':'',x.availability==='members'?'только для спонсоров':'',!x.downloadable?'только ссылка':''];
 function fdRecLine(x){return [x.platform,x.narrator||'',fdH(x.duration),x.parts>1?fdPl(x.parts,'часть','части','частей'):'',fdComp(x),x.verified?'✓ проверено':'',x.availability==='members'?'только для спонсоров':'',!x.downloadable?'только ссылка':''].filter(Boolean).join(' · ')}
 function fdToggleRecs(r){const w=r.el;if(!w)return;const open=!w.classList.contains('open');w.classList.toggle('open',open);const nb=w.querySelector('.fdn');if(nb){nb.setAttribute('aria-expanded',String(open));nb.textContent=fdPl(r.w.records.length,'запись','записи','записей')+(open?' ▴':' ▾')}
   if(open)fdRecsFill(w,r)}
 function fdRecsFill(w,r){const L=w.querySelector('.fdrecl');if(!L||L.childElementCount)return;const best=r.w.records[0];
   const words=t=>norm(t).replace(/[^\p{L}\p{N}]+/gu,' ').trim().split(' ').sort().join(' '),same=t=>words(t)===words((r.w.author||'')+' '+r.w.title);   // своё название записи — только если это не те же слова
-  for(const x of r.w.records.slice(0,16)){const d=el('div','fdrec'+(x===best?' best':''));const m=el('div','m',fdRecLine(x)+(x.title&&!same(x.title)?' · «'+x.title+'»':''));m.title=[x.title,...(x.flags||[])].filter(Boolean).join('\n');d.appendChild(m);
+  for(const x of r.w.records.slice(0,16)){const d=el('div','fdrec'+(x===best?' best':''));const m=el('div','m');fdMeta(m,[...fdRecParts(x),x.title&&!same(x.title)?'«'+fdClean(x.title)+'»':''],x);m.title=[x.title,...(x.flags||[])].filter(Boolean).join('\n');d.appendChild(m);
     const a=el('div','a');fdSrcActs(a,{key:x.key,url:x.link||x.url,platform:x.platform,author:r.w.author,title:r.w.title,downloadable:x.downloadable,item_id:x.in_library});d.appendChild(a);L.appendChild(d)}}
 // действия у записи каталога: ссылка, скачать, в Telegram, в очередь, пожаловаться; книга уже в библиотеке — открыть
 function fdSrcActs(a,c){const stop=(b,f)=>{b.onclick=e=>{e.stopPropagation();f(b)};b.onmousedown=e=>e.stopPropagation();return b};
@@ -540,7 +547,7 @@ async function fdPaintLlm(cur,busy){const sg=$('#fdLlm');if(!FDLLM){try{FDLLM=aw
 $$('#nav button').forEach(b=>{const l=b.querySelector('.l');if(l&&!b.title)b.title=l.textContent});
 new MutationObserver(()=>document.body.classList.toggle('chatmode',!$('#v-chat').hidden)).observe($('#v-chat'),{attributes:true,attributeFilter:['hidden']});
 document.body.classList.toggle('chatmode',!$('#v-chat').hidden);
-$('#fdDown').onclick=()=>{const b=$('#fdMsgs');b.scrollTop=b.scrollHeight};
+$('#fdDown').onclick=()=>{const b=$('#fdMsgs');b.scrollTo({top:b.scrollHeight,behavior:'smooth'})};
 async function fdAsk(text,fromSearch){text=(text??$('#fdAsk').value).trim();if(!text){$('#fdAsk').focus();return}
   if(FDCH&&FDCH.job){toast('Консультант ещё отвечает','warn');return}
   if(fromSearch&&VIEW!=='chat'){show('chat');FDSESS=-1}
@@ -631,7 +638,7 @@ function fdPaintChat(c,stick){if(!c)return;const box=$('#fdMsgs'),col=$('#fdCol'
     if(i===lastA&&!c.job){const rg=el('button',null,'↻ Другой ответ');rg.onclick=fdRegen;ac.appendChild(rg)}
     const foot=[];const mm=d.memory||{};if(mm.added)foot.push('память +'+mm.added);if(mm.removed)foot.push('память −'+mm.removed);const mt=m.meta||{};if(mt.seconds)foot.push(fdmm(mt.seconds));
     const ftx=el('span','fdfoot',foot.join(' · '));if((d.notes||[]).length){ftx.title=d.notes.join('\n');ftx.textContent+=(foot.length?' · ':'')+'проверка ответа: '+d.notes.length}ac.appendChild(ftx);a.appendChild(ac)});
-  box.scrollTop=atEnd?box.scrollHeight:keep;fdJump()}
+  box.scrollTop=atEnd?box.scrollHeight:keep;if(atEnd)requestAnimationFrame(()=>{box.scrollTop=box.scrollHeight});fdJump()}
 // нескачанная книга на любой карточке системы: «Ссылка» на источник, «Скачать» (полный конвейер: загрузка → склейка →
 // проверка полноты), «✈» — скачать и сразу отправить в Telegram. Обёртка display:contents — встаёт в любой ряд кнопок.
 function ndBtns(it,small){const w=el('span','ndb');const sm=small?' sm':'';
