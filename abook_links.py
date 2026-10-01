@@ -482,8 +482,9 @@ def _anchors(conn, pid, lib):
     return out[:14]
 
 
-def links_context(conn, pid, lib, excluded):
-    """Текст «КАРТА СВЯЗЕЙ» для промпта: признаки любимых книг, готовые мосты, связующие признаки."""
+def links_context(conn, pid, lib, excluded, short=False):
+    """Текст «КАРТА СВЯЗЕЙ» для промпта: признаки любимых книг, готовые мосты, связующие признаки.
+    short — есть граф ассоциаций (abook_assoc): мосты дал он, здесь только признаки якорей, 2 моста, 20 признаков."""
     idx = index(conn)
     if not idx["n"]:
         return "КАРТА СВЯЗЕЙ: ещё не построена (мосты ищи сам, по своему знанию книг)."
@@ -497,8 +498,8 @@ def links_context(conn, pid, lib, excluded):
         L.append(f"◆ [{a}] {it.get('author') or '?'} — «{it.get('title') or a}» ({why}; {f.get('genre') or '?'}, "
                  f"{f.get('medium') or '?'}): " + "; ".join(f"{FL[k]}: {', '.join(f.get(k) or [])}" for k, _, _ in FACETS if f.get(k)))
         nb = neighbors(idx, a, k=24, pool=pool)
-        far = [x for x in nb if _far(idx, a, x["id"], lib)][:4]
-        near = [x for x in nb if x not in far][:2]
+        far = [x for x in nb if _far(idx, a, x["id"], lib)][:2 if short else 4]
+        near = [] if short else [x for x in nb if x not in far][:2]
         for tag, lst in (("мост", far), ("рядом", near)):
             for x in lst:
                 o = lib.get(x["id"]) or {}
@@ -506,7 +507,7 @@ def links_context(conn, pid, lib, excluded):
                 L.append(f"   {tag} → [{x['id']}] {o.get('author') or '?'} — «{o.get('title') or x['id']}» ({m.get('genre') or '?'}, "
                          f"{m.get('medium') or '?'}, {m.get('era') or '?'}) через: " + ", ".join(s["label"] for s in x["shared"][:3]))
     top = sorted(idx["df"].items(), key=lambda kv: -kv[1])
-    tl = [f"{idx['label'][k]} ({n})" for k, n in top if n >= 3][:45]
+    tl = [f"{idx['label'][k]} ({n})" for k, n in top if n >= 3][:20 if short else 45]
     if tl:
         L.append("Самые связующие признаки библиотеки (сколько книг): " + ", ".join(tl))
     return "\n".join(L)
@@ -515,14 +516,14 @@ def links_context(conn, pid, lib, excluded):
 _CHAT_RULES = """Правила:
 1. reply — ответ живым человеческим языком на «вы», по делу, 2–8 предложений; не пересказывай анкету. Если вопрос не \
 про подбор (например, о книге или авторе) — ответь, recs можно не давать.
-2. recs — сколько сказано в «СКОЛЬКО КНИГ» ниже (0, если вопрос не о подборе). id — точно из списка КАНДИДАТЫ или КАРТЫ СВЯЗЕЙ (первое поле строки \
-до «|»); «s123» — запись каталога источников, нет на диске, id как есть; иначе id="" и книга ВНЕ обоих списков (author и title точно, по-русски). Каталожные книги предпочтительнее, \
+2. recs — сколько сказано в «СКОЛЬКО КНИГ» ниже (0, если вопрос не о подборе). id — точно из списка КАНДИДАТЫ, КАРТЫ СВЯЗЕЙ (первое поле строки \
+до «|») или АССОЦИАЦИЙ (последнее в скобках); «s123» — запись каталога источников, нет на диске, id как есть; иначе id="" и книга ВНЕ обоих списков (author и title точно, по-русски). Каталожные книги предпочтительнее, \
 но мост вне библиотеки тоже хорош — его можно скачать одной кнопкой.
 3. НИКОГДА не рекомендуй то, что в «УЖЕ ЗНАКОМО» и «НЕ ИНТЕРЕСНО» (и другие издания/переводы/радиоверсии тех же \
 произведений). Не повторяй книги, уже предложенные в этом разговоре, если слушатель не просит.
 4. kind="close" — рядом с запросом (тот же жанр/настроение). kind="bridge" — МОСТ: книга другого жанра, эпохи или \
 медиа, связанная с запросом или с любимой книгой слушателя через конкретный глубинный признак. Для моста chain \
-обязателен: from — любимая книга/фильм слушателя или сам запрос, feature — общий признак (из «КАРТЫ СВЯЗЕЙ», если \
+обязателен: from — любимая книга/фильм слушателя или сам запрос, feature — общий признак (из «КАРТЫ СВЯЗЕЙ» или тема из «АССОЦИАЦИЙ», если \
 есть), to — эта книга; why — почему связь работает и чем книга неожиданна. Для close chain можно пустыми строками.
 5. Сколько мостов — по регулятору ниже. «Удиви меня» — хотя бы 3 моста в неожиданные жанры/медиа (пьеса, \
 радиоспектакль, нон-фикшн, поэзия, игровая вселенная, классика другой эпохи), но каждый с честной цепочкой.
@@ -623,7 +624,11 @@ def build_chat_prompt(conn, pid, sid, text, distance, surprise):
                                for x in d.get("recs") or [])
             hl.append(f"КОНСУЛЬТАНТ: {_line(r['text'], 700)}" + (f" [советы: {titles}]" if titles else ""))
     dist = max(0, min(3, int(distance or 0)))
-    lctx = links_context(conn, pid, lib, excluded)
+    actx, asrc = "", {}
+    with contextlib.suppress(Exception):          # граф ассоциаций (abook_assoc): мосты якорей по всему каталогу
+        import abook_assoc as AS   # noqa: PLC0415
+        actx, asrc = AS.chat_block(conn, pid, lib, excluded, known, extra=_anchors(conn, pid, lib))
+    lctx = links_context(conn, pid, lib, excluded, short=bool(actx))
     cands = rag_context(conn, pid, text, lib, excluded, lctx)
     if cands is not None:
         doc = _drop_catalog(doc)
@@ -649,13 +654,14 @@ def build_chat_prompt(conn, pid, sid, text, distance, surprise):
          + "\n\nНЕ ИНТЕРЕСНО (слушатель отказался — не предлагать):\n"
          + ("\n".join(f"- {m['fact']}" for m in noint) if noint else "- ничего")),
         ("links", lctx + ("\n\n" + tbrief if tbrief else "")),
+        ("assoc", actx),
         ("memory", "ПАМЯТЬ О СЛУШАТЕЛЕ (самое важное и относящееся к этому сообщению; #id — для memory.remove):\n"
          + ("\n".join(ml) if ml else "- пока пусто")),
         ("candidates", cand_block if cands is not None else ""),
         ("summary", ("РАННЕЕ В ЭТОМ РАЗГОВОРЕ (кратко):\n" + summary) if summary else ""),
         ("history", "РАЗГОВОР ДО ЭТОГО:\n" + ("\n".join(hl) if hl else "- это начало разговора")),
         ("message", knob + "\n\n" + f"НОВОЕ СООБЩЕНИЕ СЛУШАТЕЛЯ: «{text}»\n\n"
-         + ("Напоминание: id только из КАНДИДАТОВ, из «КАРТЫ СВЯЗЕЙ» или пустой" if cands is not None else
+         + ("Напоминание: id только из КАНДИДАТОВ, «КАРТЫ СВЯЗЕЙ», «АССОЦИАЦИЙ» или пустой" if cands is not None else
             "Напоминание: id только из §5 CATALOG или пустой")
          + "; не из «УЖЕ ЗНАКОМО»/«НЕ ИНТЕРЕСНО»; мосты — с цепочкой; ответ — JSON по схеме.")]
     budget = None
@@ -665,7 +671,7 @@ def build_chat_prompt(conn, pid, sid, text, distance, surprise):
     except Exception:
         prompt = "\n\n".join(t for _, t in sections if t)
     return prompt, {"lib": lib, "excluded": excluded, "known": known, "noint": noint, "mem_ids": mem_ids, "budget": budget,
-                    "src": {c["id"]: c for c in cands or [] if c["kind"] == "src"}}
+                    "src": {**asrc, **{c["id"]: c for c in cands or [] if c["kind"] == "src"}}}
 
 
 def build_incognito_prompt(conn, sid, text, distance, surprise):
@@ -1440,6 +1446,9 @@ def handle_get(h, conn, p, arg):
         return h._json(map_status(conn))
     if p == "/api/find/links":
         return h._json(links_payload(conn, arg("id")))
+    if p in ("/api/find/assoc", "/api/find/assoc/status"):       # граф ассоциаций — abook_assoc.py
+        import abook_assoc as AS   # noqa: PLC0415
+        return AS.handle_get(h, conn, p, arg)
     if p == "/api/find/memory":
         return h._json({"memory": memory_list(conn, pid)})
     if p in ("/api/find/hybrid", "/api/find/foryou", "/api/find/vec/status", "/api/find/feedback",

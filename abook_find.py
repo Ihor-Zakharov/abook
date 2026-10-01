@@ -797,6 +797,8 @@ def probe(c):
             pr["parts"], pr["titles"] = len(af["urls"]), af["titles"]
             d = af["durations"]
             pr["duration"] = sum(x for x in d if x) or None
+            if all(d):                                   # длительность каждого файла — abook get сверит с ней части
+                pr["part_durations"] = d
             with contextlib.suppress(Exception):       # первый файл действительно отдаётся
                 req = urllib.request.Request(af["urls"][0], method="HEAD", headers={"User-Agent": UA})
                 urllib.request.urlopen(req, timeout=HTTP_TIMEOUT).close()
@@ -1393,6 +1395,7 @@ def _pub(c):
             "title": _line(c.get("title"), 200), "channel": _line(c.get("channel"), 120),
             "narrator": _line(c.get("narrator"), 120), "kind": c.get("kind") or "", "lang": c.get("lang") or "",
             "duration": pr.get("duration") or c.get("duration"), "parts": pr.get("parts") or 1,
+            "part_durations": pr.get("part_durations"),
             "verified": bool(pr.get("ok")), "found_by": c["found_by"], "flags": c.get("flags") or [],
             "drop": c.get("drop"), "score": c.get("score"), "ratio": c.get("ratio"), "ai_voice": c.get("ai_voice"),
             "note": _line(c.get("note"), 300), "narrator_match": c.get("narrator_match"),
@@ -1531,6 +1534,8 @@ def enqueue_candidate(conn, sid, key):
             "narrator": (cand.get("narrator") or "") + (" (ИИ-озвучка)" if cand.get("ai_voice") and "ИИ" not in (cand.get("narrator") or "") else ""),
             "kind": cand.get("kind") if cand.get("kind") in ("audiobook", "radioplay", "reading") else "audiobook",
             "lang": cand.get("lang") or "ru", "urls": cand.get("urls") or [cand["url"]],
+            **({"part_durations": cand["part_durations"]} if cand.get("part_durations")
+               and len(cand["part_durations"]) == len(cand.get("urls") or []) else {}),
             "duration_h": round(float(cand.get("duration") or 0) / 3600, 2) or (w.get("expected_h") or None),
             "source": f"{cand.get('platform')} · {cand.get('channel')}".strip(" ·"),
             "about": res.get("about") or "", "why": res.get("why") or "",

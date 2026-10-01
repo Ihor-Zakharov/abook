@@ -4,6 +4,14 @@ FIND (inject): стиль — перед </style>, пункт меню — по�
 Открывается сам при первом запуске (ИИ ещё не проверен и мастер не закрыт)."""
 
 CSS = r'''
+/* полосы прокрутки в стиле кита: тонкие, тёмные, без стрелок (в окне приложения WebView2 иначе — серые Windows) */
+*{scrollbar-width:thin;scrollbar-color:var(--line-3) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px;border:3px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--line-3);background-clip:padding-box;border:2px solid transparent}
+::-webkit-scrollbar-button{display:none;width:0;height:0}
+::-webkit-scrollbar-corner{background:transparent}
 /* ---------- «Настройка»: пять шагов первого запуска ---------- */
 .su{display:flex;flex-direction:column;gap:12px;width:min(880px,100%);margin:0 auto}
 .sustep{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:6px 16px;align-items:start;background:var(--plate);border:1px solid var(--line-1);border-radius:var(--r-xl);padding:18px 20px}
@@ -29,7 +37,7 @@ VIEW = r'''<!-- НАСТРОЙКА -->
     <p class="sub">Любой шаг можно пройти позже: приложение работает и без Telegram, а каталог дособирается сам.</p></header>
   <div class="suthemes"><span class="sub">Оформление</span><div class="seg" id="suTheme" role="radiogroup" aria-label="Оформление"></div></div>
   <div class="su" id="suBox"></div>
-  <div class="sufoot"><button class="ghost" id="suLater">Закрыть, настрою потом</button></div>
+  <div class="sufoot"><button class="btn" id="suLater" type="button">Закрыть, настрою потом</button></div>
 </section>
 
 '''
@@ -51,21 +59,21 @@ function paintSetup(){paintTheme();const s=SUST;if(!s)return;const box=$('#suBox
     const p=el('div','tx');p.innerHTML=tx;c.appendChild(p);const a=el('div','act');c.appendChild(a);const I=st.info||{};
     if(st.k==='llm'){const sg=el('div','seg');for(const [k,lab] of [['claude','Claude'],['agy','Antigravity']]){const b=el('button',I.provider===k?'on':'',lab);b.type='button';b.disabled=!(I.available||{})[k];b.title=(I.available||{})[k]?'':'CLI не найден на этом компьютере';
         b.onclick=async()=>{try{await post('/api/llm',{provider:k});FDLLM=null;loadSetup()}catch(e){toast(e.message,'err')}};sg.appendChild(b)}a.appendChild(sg);inkSeg(sg,true);
-      const tb=el('button','btn'+(st.done?'':' primary'),'Проверить связь');tb.onclick=async()=>{tb.disabled=true;tb.textContent='Проверяю…';try{const j=await post('/api/setup',{op:'test_llm'});toast(j.ok?'ИИ отвечает · '+j.seconds+' с':'Не отвечает: '+(j.error||''),j.ok?undefined:'err');loadSetup()}catch(e){toast(e.message,'err')}finally{tb.disabled=false;tb.textContent='Проверить связь'}};a.appendChild(tb);
+      const tb=mkBtn({icon:'pulse',label:'Проверить связь',cls:'btn'+(st.done?'':' primary')});tb.onclick=async()=>{setBusy(tb,true,'Проверяю…');try{const j=await post('/api/setup',{op:'test_llm'});toast(j.ok?'ИИ отвечает · '+j.seconds+' с':'Не отвечает: '+(j.error||''),j.ok?undefined:'err');loadSetup()}catch(e){toast(e.message,'err')}finally{setBusy(tb,false,'')}};a.appendChild(tb);
       if(!(I.available||{}).claude&&!(I.available||{}).agy)a.appendChild(el('span','sub','Установите Claude Code (npm i -g @anthropic-ai/claude-code, затем claude и вход) или Antigravity (agy).'))}
-    if(st.k==='library'){const i=el('input','in');i.value=I.windows||I.path||'';i.setAttribute('aria-label','Папка библиотеки');a.appendChild(i);const b=el('button','btn'+(st.done?'':' primary'),'Сохранить');
-      b.onclick=async()=>{try{const j=await post('/api/setup',{op:'library',path:i.value});toast('Папка: '+j.path+(j.restart?' · перезапустите приложение':''));loadSetup()}catch(e){toast(e.message,'err')}};a.appendChild(b)}
+    if(st.k==='library'){const i=el('input','in');i.value=I.windows||I.path||'';i.setAttribute('aria-label','Папка библиотеки');a.appendChild(i);const b=mkBtn({icon:'folder',label:'Сохранить папку',cls:'btn'+(st.done?'':' primary')});
+      b.onclick=async()=>{setBusy(b,true);try{const j=await post('/api/setup',{op:'library',path:i.value});toast('Папка: '+j.path+(j.restart?' · перезапустите приложение':''));loadSetup()}catch(e){toast(e.message,'err');setBusy(b,false)}};a.appendChild(b)}
     if(st.k==='catalog'){a.appendChild(el('span','sub',(I.records||0).toLocaleString('ru-RU')+' записей · '+(I.works||0).toLocaleString('ru-RU')+' книг'));
-      if(I.job&&I.job.running){a.appendChild(el('span','sub','· '+I.job.phase+'…'));clearTimeout(SUT);SUT=setTimeout(loadSetup,3000)}
+      if(I.job&&I.job.running){a.appendChild(el('span','sub','· '+I.job.phase+'…'));a.appendChild(mkBtn({icon:'x',label:'Остановить обход',cls:'btn',onClick:async(e,b)=>{setBusy(b,true);try{await post('/api/find/catalog',{op:'cancel'});toast('Останавливаю обход…','warn')}catch(er){toast(er.message,'err');setBusy(b,false)}}}));clearTimeout(SUT);SUT=setTimeout(loadSetup,3000)}
       else{if(I.job&&I.job.error)a.appendChild(el('span','sub','· ошибка: '+I.job.error));
-        const d=el('button','btn'+(st.done?'':' primary'),'Скачать готовый каталог');d.disabled=!I.snapshot;d.title=I.snapshot?'':'Нет снимка: положите catalog.db в ~/abook или установите gh';d.onclick=async()=>{try{await post('/api/setup',{op:'catalog_download'});loadSetup()}catch(e){toast(e.message,'err')}};a.appendChild(d);
-        const cr=el('button','ghost','Обойти источники заново');cr.onclick=async()=>{try{await post('/api/setup',{op:'catalog_crawl'});toast('Обход начат — прогресс во «Найти»')}catch(e){toast(e.message,'err')}};a.appendChild(cr)}}
-    if(st.k==='profile'){const b=el('button','btn'+(st.done?'':' primary'),st.done?'Открыть анкету':'Заполнить анкету');b.onclick=()=>show('anketa');a.appendChild(b)}
+        const d=mkBtn({icon:'download',label:'Скачать готовый каталог',cls:'btn'+(st.done?'':' primary')});d.disabled=!I.snapshot;d.title=I.snapshot?'':'Нет снимка: положите catalog.db в ~/abook или установите gh';d.onclick=async()=>{setBusy(d,true);try{await post('/api/setup',{op:'catalog_download'});loadSetup()}catch(e){toast(e.message,'err');setBusy(d,false)}};a.appendChild(d);
+        a.appendChild(mkBtn({icon:'refresh',label:'Обойти источники заново',cls:'btn',title:'Около 2,5 часа в фоне',onClick:async()=>{try{await post('/api/setup',{op:'catalog_crawl'});toast('Обход начат — прогресс во «Найти»')}catch(e){toast(e.message,'err')}}}))}}
+    if(st.k==='profile')a.appendChild(mkBtn({icon:'clipboard',label:st.done?'Открыть анкету':'Заполнить анкету',cls:'btn'+(st.done?'':' primary'),onClick:()=>show('anketa')}));
     if(st.k==='sync'){if(!I.enabled)a.appendChild(el('span','sub','нужны git и gh (GitHub CLI)'));
-      else if(I.configured){a.appendChild(el('span','sub',(I.repo||'')+(I.last?' · последняя '+I.last:'')+(I.error?' · ошибка: '+I.error:'')));const b=el('button','ghost','Синхронизировать сейчас');b.onclick=async()=>{b.disabled=true;try{const j=await post('/api/sync',{op:'now'});toast(j.ok?'Синхронизировано':(j.error||'ошибка'),j.ok?undefined:'err');loadSetup()}finally{b.disabled=false}};a.appendChild(b)}
-      else{const b=el('button','btn','Включить синхронизацию');b.onclick=async()=>{b.disabled=true;b.textContent='Создаю приватный репозиторий…';try{const j=await post('/api/sync',{op:'enable'});toast(j.ok?'Синхронизация включена: '+(j.repo||''):(j.error||'ошибка'),j.ok?undefined:'err');loadSetup()}finally{b.disabled=false}};a.appendChild(b);
-        if(!st.done){const l=el('button','ghost','Позже');l.onclick=async()=>{await post('/api/setup',{op:'skip_sync'});loadSetup()};a.appendChild(l)}}}
-    if(st.k==='telegram'){if(I.configured)a.appendChild(el('span','sub','подключено'));else if(!st.done){const b=el('button','ghost','Позже');b.onclick=async()=>{await post('/api/setup',{op:'skip_tg'});loadSetup()};a.appendChild(b)}}
+      else if(I.configured){a.appendChild(el('span','sub',(I.repo||'')+(I.last?' · последняя '+I.last:'')+(I.error?' · ошибка: '+I.error:'')));const b=mkBtn({icon:'refresh',label:'Синхронизировать сейчас',cls:'btn'});b.onclick=async()=>{setBusy(b,true);try{const j=await post('/api/sync',{op:'now'});toast(j.ok?'Синхронизировано':(j.error||'ошибка'),j.ok?undefined:'err');loadSetup()}finally{setBusy(b,false)}};a.appendChild(b)}
+      else{const b=mkBtn({icon:'upload',label:'Включить синхронизацию',cls:'btn'});b.onclick=async()=>{setBusy(b,true,'Создаю приватный репозиторий…');try{const j=await post('/api/sync',{op:'enable'});toast(j.ok?'Синхронизация включена: '+(j.repo||''):(j.error||'ошибка'),j.ok?undefined:'err');loadSetup()}finally{setBusy(b,false,'')}};a.appendChild(b);
+        if(!st.done)a.appendChild(mkBtn({label:'Позже',cls:'btn',title:'Шаг отложится, приложение работает и без него',onClick:async()=>{await post('/api/setup',{op:'skip_sync'});loadSetup()}}))}}
+    if(st.k==='telegram'){if(I.configured)a.appendChild(el('span','sub','подключено'));else if(!st.done)a.appendChild(mkBtn({label:'Позже',cls:'btn',title:'Шаг отложится, приложение работает и без Telegram',onClick:async()=>{await post('/api/setup',{op:'skip_tg'});loadSetup()}}))}
     box.appendChild(c)})}
 const THEMES=[['gold','Золотистая','тёплая бумага, золотой свет'],['grey','Серая','нейтральные чернила, белый свет']];
 const themeCur=()=>{try{return localStorage.getItem('abook.theme')==='grey'?'grey':'gold'}catch(e){return 'gold'}};

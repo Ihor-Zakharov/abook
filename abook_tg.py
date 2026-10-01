@@ -565,8 +565,11 @@ def _run_send(e):
         + (["--dry-run"] if DRY_RUN else [])
     seen = set()
     try:
+        env = dict(os.environ)
+        if e.get("skip_check"):                 # «всё равно отправить»: осознанно — и мелкие ошибки декодирования тоже
+            env["ABOOK_TG_LENIENT"] = "1"
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                cwd=str(HOME), start_new_session=True)
+                                cwd=str(HOME), start_new_session=True, env=env)
     except OSError as ex:
         return "error", f"abook-tg не запустился: {ex}"
     with _LOCK:

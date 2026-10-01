@@ -18,7 +18,7 @@ CSS = r'''
 .pmi:hover,.pma:hover,.pmi:focus-visible,.pma:focus-visible{background:var(--surface-2);color:var(--ink);outline:none}
 .pmi.on{background:var(--surface)}
 .pmi .pmt{display:flex;flex-direction:column;min-width:0;flex:1;line-height:1.3}.pmi .pmt b{font-weight:600;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pmi .pmt small{font:500 11px/1.3 var(--font-mono);color:var(--ink-3)}
-.pmi .chk{color:var(--ink);font-size:13px}
+.pmi .chk{color:var(--ink);display:grid;place-items:center}.pmi .chk svg,.pma>svg{width:15px;height:15px;flex:none;color:var(--ink-2)}
 .pma.danger{color:var(--ink-2)}.pma.danger:hover{color:var(--err)}.pma[disabled]{opacity:.4;cursor:default;background:none}
 .psep{height:1px;background:var(--line-1);margin:4px 2px}
 .modal-box h3{margin:0;font:700 22px/1.2 var(--font-display);letter-spacing:-.02em;color:var(--ink)}
@@ -93,7 +93,7 @@ CSS = r'''
 .fchips{display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:var(--s1);border:1px solid var(--line-2);border-radius:var(--r-m);padding:6px 8px;min-height:44px;transition:border-color var(--t-fast),box-shadow var(--t-base) var(--ease-out)}
 .fchips:focus-within{border-color:color-mix(in oklab,var(--el-a) 60%,transparent);box-shadow:var(--focus-ring)}
 .fchips .fc{display:inline-flex;align-items:center;gap:4px;font-size:13px;height:28px;padding:0 4px 0 10px;border-radius:var(--r-s);background:var(--s4);color:var(--ink)}
-.fchips .fc button{color:var(--ink-3);padding:0 5px}.fchips .fc button:hover{color:var(--err)}
+.fchips .fc .fcx{display:grid;place-items:center;width:22px;height:22px;border-radius:var(--r-xs);color:var(--ink-3)}.fchips .fc .fcx:hover{color:var(--err)}.fchips .fc .fcx svg{width:12px;height:12px}
 .fchips input{flex:1;min-width:160px;background:none;border:0;outline:none;padding:4px 2px;font-size:14px;color:var(--ink)}
 .fchips input:focus-visible{outline:none;box-shadow:none}
 .qhint{font-size:13.5px;color:var(--ink-2)}
@@ -153,7 +153,7 @@ CSS = r'''
 .aipin .hd h3{margin:0;font:700 18px/1.25 var(--font-display);letter-spacing:-.02em;color:var(--ink)}
 .aipin .hd h3::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--el-a);box-shadow:var(--el-glow);margin:0 10px 3px 0;vertical-align:middle}
 .aipin .hd .sub{font-size:12.5px}
-.aipin .pi{display:flex;gap:14px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--line-1)}
+.aipin .pi{display:flex;gap:14px;align-items:center;padding:10px 0;border-top:1px solid var(--line-1)}
 .aipin .pi .n{flex:none;width:28px;height:28px;border-radius:var(--r-s);display:grid;place-items:center;font:700 14px/1 var(--font-display);background:var(--s2);box-shadow:inset 0 0 0 1px var(--line-2);color:var(--ink)}
 .aipin .pi .b{flex:1;min-width:0}.aipin .pi .t{font-weight:500;color:var(--ink);cursor:pointer}.aipin .pi .t:hover{text-decoration:underline;text-decoration-color:var(--line-3);text-underline-offset:3px}
 .aipin .pi .w{font-size:13.5px;color:var(--ink-2);line-height:1.5;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;margin-top:2px}
@@ -183,7 +183,7 @@ VIEWS = r'''<!-- АНКЕТА -->
 </section>
 <dialog class="modal" id="modal" aria-labelledby="mT"><div class="modal-box">
   <div class="drawer-head"><h3 id="mT"></h3></div><div class="mbody" id="mB"></div><div class="merr" id="mErr" hidden></div>
-  <div class="modal-actions"><button class="ghost" id="mNo">Отмена</button><button class="btn primary" id="mYes">OK</button></div></div></dialog>'''
+  <div class="btn-row modal-actions"><button class="btn" id="mNo" type="button">Отмена</button><button class="btn primary" id="mYes" type="button">OK</button></div></div></dialog>'''
 
 JS = r'''
 /* ================= profiles ================= */
@@ -202,9 +202,9 @@ const needsOnboarding=()=>{const p=profCur();return !!p&&!p.is_default&&p.questi
 function closeMenu(){$('#profMenu').hidden=true;$('#profBtn').setAttribute('aria-expanded','false')}
 function openMenu(){const m=$('#profMenu'),cur=profCur();m.innerHTML='';m.appendChild(el('div','pmh','Профили'));
   for(const p of PROFS){const b=el('button','pmi'+(p.id===PROFILE?' on':''));b.setAttribute('role','menuitem');b.appendChild(avatar(p));const t=el('span','pmt');t.appendChild(el('b',null,p.name));t.appendChild(el('small',null,profLine(p)));b.appendChild(t);
-    if(p.id===PROFILE)b.appendChild(el('span','chk','✓'));b.onclick=()=>switchProfile(p.id);m.appendChild(b)}
-  m.appendChild(el('div','psep'));const add=(t,f,cls)=>{const b=el('button','pma'+(cls?' '+cls:''),t);b.setAttribute('role','menuitem');b.onclick=()=>{closeMenu();f()};m.appendChild(b);return b};
-  add('＋ Новый профиль',newProfileDlg);add('Переименовать «'+cur.name+'»',renameDlg);const d=add('Удалить «'+cur.name+'»…',deleteDlg,'danger');
+    if(p.id===PROFILE){const c=el('span','chk');c.appendChild(ICON('check'));b.appendChild(c)}b.onclick=()=>switchProfile(p.id);m.appendChild(b)}
+  m.appendChild(el('div','psep'));const add=(t,f,cls,icon)=>{const b=el('button','pma'+(cls?' '+cls:''));if(icon)b.appendChild(ICON(icon));b.appendChild(document.createTextNode(t));b.setAttribute('role','menuitem');b.onclick=()=>{closeMenu();f()};m.appendChild(b);return b};
+  add('Новый профиль',newProfileDlg,'','folder-plus');add('Переименовать «'+cur.name+'»',renameDlg,'','pencil');const d=add('Удалить «'+cur.name+'»…',deleteDlg,'danger','trash');
   if(cur.is_default){d.disabled=true;d.title='Основной профиль удалить нельзя: его файл для ИИ — главный'}
   m.hidden=false;$('#profBtn').setAttribute('aria-expanded','true');m.querySelector('.pmi.on')?.focus()}
 $('#profBtn').onclick=e=>{e.stopPropagation();$('#profMenu').hidden?openMenu():closeMenu()};
@@ -220,7 +220,7 @@ let MOK=null;
 function dlg(title,build,okText,onOk,danger){$('#mT').textContent=title;const b=$('#mB');b.innerHTML='';const focus=build(b);$('#mErr').hidden=true;
   const y=$('#mYes');y.textContent=okText;y.className='btn '+(danger?'solid danger':'primary');y.disabled=false;MOK=onOk;const m=$('#modal');if(!m.open)openDialog(m);setTimeout(()=>(focus||y).focus(),20)}
 function dlgClose(){const m=$('#modal');if(m.open&&!m.classList.contains('closing'))closeDialog(m);MOK=null}
-async function dlgOk(){if(!MOK||$('#mYes').disabled)return;const y=$('#mYes');y.disabled=true;try{await MOK();dlgClose()}catch(e){$('#mErr').textContent=e.message;$('#mErr').hidden=false;y.disabled=false}}
+async function dlgOk(){if(!MOK||$('#mYes').disabled)return;const y=$('#mYes');setBusy(y,true);try{await MOK();setBusy(y,false);dlgClose()}catch(e){$('#mErr').textContent=e.message;$('#mErr').hidden=false;setBusy(y,false)}}
 $('#mNo').onclick=dlgClose;$('#mYes').onclick=dlgOk;$('#modal').onmousedown=e=>{if(e.target.id==='modal')dlgClose()};
 $('#modal').addEventListener('keydown',e=>{if(e.key==='Escape'){e.preventDefault();dlgClose()}else if(e.key==='Enter'&&e.target.tagName==='INPUT'){e.preventDefault();dlgOk()}});
 function nameInput(v){const i=el('input','in');i.maxLength=40;i.value=v||'';i.placeholder='Имя, например «Марина»';i.autocomplete='off';return i}
@@ -286,7 +286,7 @@ function chipSet(opts,arr,onCh,cls,label){const c=el('div','chips');const extra=
   return c}
 function oneOf(opts,obj,key,onCh){const c=el('div','chips');c.setAttribute('role','radiogroup');const bs=[];for(const o of opts){const [v,t]=Array.isArray(o)?o:[o,o];const b=el('button','chip'+(obj[key]===v?' on':''),t);b.type='button';b.dataset.v=v;b.onclick=()=>{obj[key]=obj[key]===v?'':v;bs.forEach(x=>x.classList.toggle('on',x.dataset.v===obj[key]));onCh()};bs.push(b);c.appendChild(b)}return c}
 function freeChips(arr,ph,onCh){const w=el('div','fchips');const inp=el('input');inp.placeholder=ph;
-  const paint=()=>{w.querySelectorAll('.fc').forEach(x=>x.remove());arr.forEach((v,i)=>{const c=el('span','fc',v);const x=el('button',null,'×');x.title='убрать';x.onclick=()=>{arr.splice(i,1);paint();onCh()};c.appendChild(x);w.insertBefore(c,inp)})};
+  const paint=()=>{w.querySelectorAll('.fc').forEach(x=>x.remove());arr.forEach((v,i)=>{const c=el('span','fc',v);c.appendChild(mkBtn({icon:'x',cls:'fcx',aria:'Убрать «'+v+'»',onClick:()=>{arr.splice(i,1);paint();onCh()}}));w.insertBefore(c,inp)})};
   const addv=()=>{let ch=false;for(const v of inp.value.split(/[,;]/).map(s=>s.trim()).filter(Boolean))if(!arr.some(x=>norm(x)===norm(v))){arr.push(v.slice(0,80));ch=true}inp.value='';if(ch){paint();onCh()}};
   inp.onkeydown=e=>{if(e.key==='Enter'||e.key===','||e.key===';'){e.preventDefault();addv()}else if(e.key==='Backspace'&&!inp.value&&arr.length){arr.pop();paint();onCh()}};inp.onblur=addv;
   w.appendChild(inp);w.onclick=e=>{if(e.target===w)inp.focus()};paint();return w}
@@ -303,7 +303,7 @@ function entryCard(list,e,idx,whyOpts,whyLabel,repaint){if(e.kind==='author')why
   else if(e.id){const t=el('div','tt',(e.author?e.author+' — ':'')+e.title);t.appendChild(el('small',null,e.meta||'в вашей библиотеке'));h.appendChild(t);h.appendChild(el('span','badge','в библиотеке'))}
   else if(whyOpts===QA.options.book_like||whyOpts===QA.options.book_dislike){const ed=el('div','ed');const a=txt(e,'author','Автор',200);a.setAttribute('list','dlAuthors');ed.appendChild(a);ed.appendChild(txt(e,'title','Название',300));h.appendChild(ed);h.appendChild(el('span','badge out','вне библиотеки'))}
   else{const t=el('div','ed');t.style.gridTemplateColumns='1fr';t.appendChild(txt(e,'title','Название',300));h.appendChild(t)}
-  const x=el('button','x','×');x.title='убрать';x.onclick=()=>{list.splice(idx,1);qaDirty();repaint()};h.appendChild(x);c.appendChild(h);
+  h.appendChild(mkBtn({icon:'x',cls:'x',aria:'Убрать из списка',onClick:()=>{list.splice(idx,1);qaDirty();repaint()}}));c.appendChild(h);
   const l=el('div','ql');l.style.cssText='font-size:13.5px;color:var(--ink-2)';l.textContent=whyLabel;c.appendChild(l);
   e.why=e.why||[];c.appendChild(chipSet(whyOpts,e.why,qaDirty,whyOpts===QA.options.book_dislike?'neg':''));
   const r=el('div','r');r.appendChild(miniRate(e,qaDirty));r.appendChild(txt(e,'comment','Одной строкой: что запомнилось (необязательно)',400));c.appendChild(r);return c}
@@ -312,8 +312,9 @@ function bookStep(body,key,whyOpts,whyLabel,ph){const list=qa()[key];const wrap=
   const inp=el('input');inp.placeholder=ph;inp.autocomplete='off';inp.spellcheck=false;qin.appendChild(inp);sb.appendChild(qin);const hits=el('div','hits');hits.hidden=true;sb.appendChild(hits);wrap.appendChild(sb);
   const cnt=el('div','qcount');wrap.appendChild(cnt);const ents=el('div','qents');wrap.appendChild(ents);body.appendChild(wrap);
   let H=[],act=0,seq=0,tmr=null,q='';
-  const repaint=()=>{ents.innerHTML='';cnt.innerHTML=list.length?`Добавлено: <b>${list.length}</b>`+(key==='books_liked'&&list.length<3?' · хорошо бы ещё пару':''):'<span class="qhint">Начните вводить название или автора — подскажу из библиотеки. Любую другую книгу — как «Автор — Название»; любимого автора целиком — «Добавить автора» (Alt+Enter) и опишите, чем он цепляет.</span>';
-    for(let i=list.length-1;i>=0;i--)ents.appendChild(entryCard(list,list[i],i,whyOpts,whyLabel,repaint))};
+  const repaint=()=>{cnt.innerHTML=list.length?`Добавлено: <b>${list.length}</b>`+(key==='books_liked'&&list.length<3?' · хорошо бы ещё пару':''):'<span class="qhint">Начните вводить название или автора — подскажу из библиотеки. Любую другую книгу — как «Автор — Название»; любимого автора целиком — «Добавить автора» (Alt+Enter) и опишите, чем он цепляет.</span>';
+    // newest first, 20 cards a window — a long list of books does not stretch the step
+    pager(ents,[...list].reverse(),(e,j)=>entryCard(list,e,list.length-1-j,whyOpts,whyLabel,repaint),{page:20,key:key,small:true})};
   const has=(a,t,id)=>list.some(x=>(id&&x.id===id)||(norm(x.title).trim()===norm(t).trim()&&(!a||!x.author||norm(x.author)===norm(a))));
   const add=it=>{if(has(it.author,it.title,it.id)){toast('Уже в списке','warn');return}list.push({id:it.id||null,author:it.author||'',title:it.title,meta:it.meta||'',kind:it.kind||'book',why:[],rating:null,comment:''});inp.value='';q='';hits.hidden=true;qaDirty();repaint();inp.focus()};
   const free=()=>{const s=q.trim();if(!s)return;const m=s.split(/\s+[—–-]\s+/);add(m.length>1?{author:m[0].trim(),title:m.slice(1).join(' — ').trim()}:{author:'',title:s})};
@@ -330,8 +331,8 @@ function bookStep(body,key,whyOpts,whyLabel,ph){const list=qa()[key];const wrap=
     else if(e.key==='Enter'){e.preventDefault();if(!q)return;pick(e.altKey?H.length+1:act)}else if(e.key==='Escape'){hits.hidden=true}};
   inp.onblur=()=>setTimeout(()=>{hits.hidden=true},150);inp.onfocus=()=>{if(q)paint()};repaint();setTimeout(()=>inp.focus(),30)}
 function titleStep(body,key,whyOpts,ph,gKey,gOpts,gLabel){const list=qa()[key];sec(body,gLabel,chipSet(gOpts,qa()[gKey],qaDirty));const wrap=el('div','qsec');const row=el('div','qsearch');const qin=el('div','qin');const inp=el('input');inp.placeholder=ph;inp.autocomplete='off';qin.appendChild(inp);
-  const b=el('button','ghost sm','Добавить');qin.appendChild(b);row.appendChild(qin);wrap.appendChild(row);const cnt=el('div','qcount');wrap.appendChild(cnt);const ents=el('div','qents');wrap.appendChild(ents);body.appendChild(wrap);
-  const repaint=()=>{ents.innerHTML='';cnt.innerHTML=list.length?`Добавлено: <b>${list.length}</b>`:'<span class="qhint">Название и Enter. Год или режиссёра можно дописать в скобках.</span>';for(let i=list.length-1;i>=0;i--)ents.appendChild(entryCard(list,list[i],i,whyOpts,'Чем понравился',repaint))};
+  const b=mkBtn({label:'Добавить',small:true});qin.appendChild(b);row.appendChild(qin);wrap.appendChild(row);const cnt=el('div','qcount');wrap.appendChild(cnt);const ents=el('div','qents');wrap.appendChild(ents);body.appendChild(wrap);
+  const repaint=()=>{cnt.innerHTML=list.length?`Добавлено: <b>${list.length}</b>`:'<span class="qhint">Название и Enter. Год или режиссёра можно дописать в скобках.</span>';pager(ents,[...list].reverse(),(e,j)=>entryCard(list,e,list.length-1-j,whyOpts,'Чем понравился',repaint),{page:20,key:key,small:true})};
   const add=()=>{const t=inp.value.trim();if(!t)return;if(list.some(x=>norm(x.title)===norm(t))){toast('Уже в списке','warn');return}list.push({title:t.slice(0,300),why:[],rating:null,comment:''});inp.value='';qaDirty();repaint();inp.focus()};
   inp.onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();add()}};b.onclick=add;repaint();setTimeout(()=>inp.focus(),30)}
 
@@ -372,13 +373,13 @@ const STEPR={
    const g=group(b,'Вопросы консультанта',w=>{const L=el('div','qbody');w.appendChild(L);
      const paint=()=>{L.innerHTML='';for(const e of x.qa){const s=sec(L,e.q,oneOf(e.options,e,'a',qaDirty));s.appendChild(txt(e,'a','Свой ответ',300,'sm'))}
        if(!x.qa.length)L.appendChild(el('p','sub','Консультант посмотрит на анкету и спросит то, чего ему не хватает для точных советов.'))};paint();
-     const go=el('button','btn','Задать вопросы');go.onclick=async()=>{go.disabled=true;go.textContent='Думаю…';try{await qaFlush();const j=await post('/api/questionnaire/questions',{});
+     const go=mkBtn({icon:'question',label:x.qa.length?'Ещё вопросы':'Задать вопросы',cls:'btn',title:'Консультант спросит то, чего не хватает для точных советов (≈ 10–20 с)'});go.onclick=async()=>{setBusy(go,true,'Думаю…');try{await qaFlush();const j=await post('/api/questionnaire/questions',{});
          const have=new Set(x.qa.map(e=>e.q));for(const q of j.questions||[])if(!have.has(q.q))x.qa.push({q:q.q,options:q.options,a:''});qaDirty();paint();toast('Вопросов: '+(j.questions||[]).length)}
-       catch(e){toast(e.message,'err')}finally{go.disabled=false;go.textContent='Ещё вопросы'}};w.appendChild(go)})},
+       catch(e){toast(e.message,'err')}finally{setBusy(go,false,go.title)}};w.appendChild(go)})},
  summary:b=>renderSummary(b)};
 function renderSummary(b){const L=(QA.lines||[]).filter(x=>x.key!=='brief');const box=el('div','qsum');
   if(!L.length&&!(QA.answers||{}).brief)b.appendChild(el('div','qempty','Анкета пока пустая. Добавьте хотя бы пару книг — это главное для подбора.'));
-  for(const x of L){const r=el('div','it');r.appendChild(el('span','k',x.label));r.appendChild(el('span','v',x.text));const e=el('button','ghost sm','Изменить');e.onclick=()=>{if(LINE2TAB[x.key])QTAB=LINE2TAB[x.key];goStep(LINE2STEP[x.key]??0)};r.appendChild(e);box.appendChild(r)}
+  for(const x of L){const r=el('div','it');r.appendChild(el('span','k',x.label));r.appendChild(el('span','v',x.text));r.appendChild(mkBtn({icon:'pencil',label:'Изменить',small:true,onClick:()=>{if(LINE2TAB[x.key])QTAB=LINE2TAB[x.key];goStep(LINE2STEP[x.key]??0)}}));box.appendChild(r)}
   if(L.length)b.appendChild(box);if((QA.answers||{}).brief){const d=el('details');d.appendChild(el('summary','sub','+ бриф этого профиля (BRIEF-COMMON.md) тоже будет учтён'));d.appendChild(el('div','brief',QA.answers.brief));b.appendChild(d)}
   const nrev=(profCur()||{}).reviews||0;const go=el('div','qgo');const tx=el('div','tx');
   tx.innerHTML=`<b>Что будет дальше.</b> Claude прочитает анкету${nrev?`, ваши отзывы (${nrev}, свежие весят больше)`:''} и каталог библиотеки, при необходимости поищет в интернете, есть ли подходящие аудиокниги вне библиотеки. Обычно 1–4 минуты; можно уйти на другую вкладку.`;
@@ -393,16 +394,16 @@ function renderTextFill(){const box=$('#qaBox');box.innerHTML='';qFillSwitch(box
   card.appendChild(el('p','sub','Свободно, как другу: любимые книги и почему, что бросили, фильмы и игры, когда и где слушаете, чего не хотите. Claude разложит рассказ по анкете — заполненное вами не перетрёт, — и вы проверите всё в «Итоге».'));
   const f=el('div','field area');f.innerHTML='<div class="field-ring"></div><div class="field-body"><textarea id="qText" maxlength="8000" aria-label="Рассказ о вкусе" placeholder="«Обожаю „Убик“ и „Конец вечности“ — люблю, когда реальность трескается. „Улисс“ бросил на трети: слишком словесно. Из кино — „Интерстеллар“, „Остров проклятых“. Слушаю в дороге, часа по два, мрачное — да, но без жестокости к детям…»"></textarea></div></div>';card.appendChild(f);
   const ft=el('div','qfoot');const go=el('button','btn primary','Заполнить анкету');const note=el('span','sub','≈ 10–20 с · Claude Sonnet');
-  go.onclick=async()=>{const t=$('#qText').value.trim();if(t.length<20){toast('Расскажите чуть подробнее','warn');$('#qText').focus();return}go.disabled=true;go.textContent='Раскладываю по анкете…';procSet('qtext',{label:'Claude раскладывает рассказ по анкете',pct:null});
+  go.onclick=async()=>{const t=$('#qText').value.trim();if(t.length<20){toast('Расскажите чуть подробнее','warn');$('#qText').focus();return}setBusy(go,true,'Раскладываю по анкете…');procSet('qtext',{label:'Claude раскладывает рассказ по анкете',pct:null});
     try{const j=await post('/api/questionnaire/from_text',{text:t});store.set('abook.qtext.'+PROFILE,'');procEnd('qtext',true);toast('Заполнено: '+(j.filled||[]).length+' разделов — проверьте');QFILL='steps';store.set('abook.qfill','steps');QA=null;await loadAnketa();goStep(QSTEPS.length-1)}
-    catch(e){procEnd('qtext',false);toast(e.message,'err');go.disabled=false;go.textContent='Заполнить анкету'}};
+    catch(e){procEnd('qtext',false);toast(e.message,'err');setBusy(go,false,'')}};
   ft.appendChild(go);ft.appendChild(note);card.appendChild(ft);box.appendChild(card);const ta=$('#qText');ta.value=store.get('abook.qtext.'+PROFILE,'');ta.oninput=()=>store.set('abook.qtext.'+PROFILE,ta.value);ta.focus()}
 function renderForm(){if(QFILL==='text'){renderTextFill();return}const box=$('#qaBox');box.innerHTML='';qFillSwitch(box);const st=QSTEPS[QSTEP];qa();
   const hd=el('div','qhead');const dots=el('nav','qdots');dots.setAttribute('aria-label','Шаги анкеты');QSTEPS.forEach((x,i)=>{if(i)dots.appendChild(el('span','qsep'));
     const d=el('button','qdot'+(i===QSTEP?' on':'')+(i<QSTEPS.length-1&&filled(x.k)?' done':''));d.type='button';d.title=x.t;
     d.appendChild(el('span','n',String(i+1)));d.appendChild(el('span','l',x.d));if(i===QSTEP)d.setAttribute('aria-current','step');d.onclick=()=>goStep(i);dots.appendChild(d)});hd.appendChild(dots);box.appendChild(hd);
   const card=el('div','qcard');card.appendChild(el('h3','qt',st.t));card.appendChild(el('p','sub',st.s+(QSTEP<QSTEPS.length-1?' Всё необязательно.':'')));const body=el('div','qbody');card.appendChild(body);box.appendChild(card);STEPR[st.k](body);
-  const ft=el('div','qfoot');const back=el('button','ghost','← Назад');back.hidden=QSTEP===0;back.onclick=()=>goStep(QSTEP-1);ft.appendChild(back);
+  const ft=el('div','qfoot');const back=mkBtn({icon:'chev-r',label:'Назад',cls:'btn rot',onClick:()=>goStep(QSTEP-1)});back.hidden=QSTEP===0;ft.appendChild(back);
   if(QA.source==='brief'||AIST&&AIST.latest){const c=el('button','linkbtn','Закрыть анкету');c.onclick=async()=>{await qaFlush();QMODE=AIST&&AIST.latest?'result':'brief';renderAnketa()};ft.appendChild(c)}
   ft.appendChild(el('span','spacer'));const sv=el('span','qsaved');sv.id='qaSaved';sv.textContent=QA.updated?'черновик сохранён · '+fmtDT(QA.updated):'';ft.appendChild(sv);
   if(QSTEP<QSTEPS.length-1){const nx=el('button','btn primary',QSTEP===QSTEPS.length-2?'К итогу →':'Далее →');nx.title='Ctrl+Enter';nx.onclick=()=>goStep(QSTEP+1);ft.appendChild(nx)}
@@ -417,7 +418,7 @@ const mmss=s=>{s=Math.max(0,Math.floor(s));return String(Math.floor(s/60)).padSt
 let RUNT=null;
 function renderRunning(){const box=$('#qaBox');const j=AIST&&AIST.job;if(!j){QMODE=AIST&&AIST.latest?'result':'form';return renderAnketa()}
   let r=$('#qaRun');if(!r){box.innerHTML='';r=el('div','qrun');r.id='qaRun';r.innerHTML='<h3 id="qrT"></h3><div class="tm" id="qrTm">00:00</div><div class="ibar"><i></i></div><div class="ph" id="qrPh"></div><div class="qev" id="qrEv"></div>';
-    const c=el('button','ghost','Отменить');c.onclick=async()=>{c.disabled=true;try{await post('/api/ai/cancel',{});toast('Отменяю…','warn')}catch(e){toast(e.message,'err')}};r.appendChild(c);
+    r.appendChild(mkBtn({icon:'x',label:'Отменить',cls:'btn',onClick:async(e,c)=>{setBusy(c,true,'Отменяю…');try{await post('/api/ai/cancel',{});toast('Отменяю…','warn')}catch(er){toast(er.message,'err');setBusy(c,false)}}}));
     r.appendChild(el('p','sub','Обычно 1–4 минуты (не больше 6). Можно перейти на другую вкладку — результат появится здесь и в «Что дальше».'));box.appendChild(r)}
   $('#qrT').textContent=j.kind==='refresh'?'Claude пересматривает топ-5 с учётом отзывов':'Claude составляет ваш профиль и топ-5';
   $('#qrPh').textContent=j.phase+(j.attempt>1?' · попытка '+j.attempt:'');const ev=$('#qrEv');ev.innerHTML='';
@@ -425,7 +426,7 @@ function renderRunning(){const box=$('#qaBox');const j=AIST&&AIST.job;if(!j){QMO
   const t0=Date.now()-j.elapsed*1000;clearInterval(RUNT);const tick=()=>{const t=$('#qrTm');if(!t){clearInterval(RUNT);return}t.textContent=mmss((Date.now()-t0)/1000)};tick();RUNT=setInterval(tick,500)}
 async function aiTick(){clearTimeout(AIPOLL);const my=PROFILE;let s;try{s=await api('/api/ai/status')}catch(e){AIPOLL=setTimeout(aiTick,4000);return}if(my!==PROFILE)return;
   const was=!!(AIST&&AIST.job);AIST=s;
-  if(s.job)procSet('ai',{label:'Claude · '+(s.job.kind==='plus1'?'+1 · ':'')+(s.job.phase||(s.job.kind==='refresh'?'пересмотр':'подбор')),pct:null,accent:'white'});
+  if(s.job)procSet('ai',{label:'Claude · '+(s.job.kind==='plus1'?'+1 · ':'')+(s.job.phase||(s.job.kind==='refresh'?'пересмотр':'подбор')),pct:null,accent:'white',cancel:async()=>{try{await post('/api/ai/cancel',{});toast('Отменяю…','warn')}catch(e){toast(e.message,'err')}}});
   else if(was)procEnd('ai',!!(s.history[0]&&s.history[0].status==='done'));
   if(s.job){if(VIEW==='anketa'&&QA&&s.job.kind!=='plus1'){QMODE='running';renderRunning()}if(VIEW==='next')paintPinned();AIPOLL=setTimeout(aiTick,VIEW==='anketa'?1000:2500);if(!was)loadProfiles();return}
   if(was){clearInterval(RUNT);await loadProfiles();const h=s.history[0];
@@ -439,14 +440,15 @@ async function aiTick(){clearTimeout(AIPOLL);const my=PROFILE;let s;try{s=await 
 
 /* ---------- result ---------- */
 function linkify(parent,text){const re=/https?:\/\/[^\s<>()«»"]+[^\s<>()«»".,;:!?]/g;let i=0,m;while((m=re.exec(text))){parent.appendChild(document.createTextNode(text.slice(i,m.index)));const a=el('a',null,m[0].replace(/^https?:\/\/(www\.)?/,'').slice(0,60));a.href=m[0];a.target='_blank';a.rel='noopener noreferrer';parent.appendChild(a);i=m.index+m[0].length}parent.appendChild(document.createTextNode(text.slice(i)))}
-function qBtn(it,small){const b=el('button','ghost'+(small?' sm':'')+(it&&it.in_queue?' on':''),it&&it.in_queue?'✓ в очереди':'+ в очередь');if(!it){b.disabled=true;return b}
-  b.onclick=async e=>{e.stopPropagation();try{const j=await post('/api/queue',{op:it.in_queue?'remove':'add',item_id:it.id});it.in_queue=!it.in_queue;b.textContent=it.in_queue?'✓ в очереди':'+ в очередь';b.classList.toggle('on',it.in_queue);applyOut(j.out);refreshMeta();loadProfiles()}catch(er){toast(er.message,'err')}};return b}
+// «В очередь» как переключатель: aria-pressed + ✓ в отведённом месте, подпись не меняет ширины
+function qBtn(it,small){const b=mkBtn({icon:'layers',label:it&&it.in_queue?'В очереди':'В очередь',small,check:true,pressed:!!(it&&it.in_queue),title:it&&it.in_queue?'Убрать из очереди':'Поставить в очередь прослушивания'});if(!it){b.disabled=true;b.title='Книги нет в библиотеке';return b}
+  b.onclick=async e=>{e.stopPropagation();try{const j=await post('/api/queue',{op:it.in_queue?'remove':'add',item_id:it.id});it.in_queue=!it.in_queue;b.childNodes[1].textContent=it.in_queue?'В очереди':'В очередь';setPressed(b,it.in_queue);b.title=it.in_queue?'Убрать из очереди':'Поставить в очередь прослушивания';if(it.in_queue)kick(.35);applyOut(j.out);refreshMeta();loadProfiles()}catch(er){toast(er.message,'err')}};return b}
 function runMeta(r){return ['Claude'+(r.model?' ('+r.model+')':''),fmtDT(r.finished||r.started),r.duration_sec?mmss(r.duration_sec):'',r.kind==='refresh'?'пересмотр с учётом отзывов':'по анкете'].filter(Boolean).join(' · ')}
 async function renderResult(){const box=$('#qaBox');let run=AIST&&AIST.latest;
   if(VIEWRUN&&(!run||VIEWRUN!==run.id)){try{run=await api('/api/ai/run?id='+VIEWRUN)}catch(e){VIEWRUN=null}}
   if(!run||!run.result){QMODE=QA.source==='brief'?'brief':'form';return renderAnketa()}
   const R=run.result,P=R.profile||{};box.innerHTML='';const wrap=el('div','ares');box.appendChild(wrap);
-  if(VIEWRUN&&AIST.latest&&VIEWRUN!==AIST.latest.id){const v=el('div','vbanner');v.appendChild(el('span',null,'Вы смотрите прежний подбор от '+fmtDT(run.finished)+'.'));const bk=el('button','ghost sm','К последнему');bk.onclick=()=>{VIEWRUN=null;renderAnketa()};v.appendChild(bk);wrap.appendChild(v)}
+  if(VIEWRUN&&AIST.latest&&VIEWRUN!==AIST.latest.id){const v=el('div','vbanner');v.appendChild(el('span',null,'Вы смотрите прежний подбор от '+fmtDT(run.finished)+'.'));v.appendChild(mkBtn({icon:'chev-r',label:'К последнему',small:true,onClick:()=>{VIEWRUN=null;renderAnketa()}}));wrap.appendChild(v)}
   const h1=el('div','arh');const t=el('div');t.appendChild(el('h3',null,'Ваш профиль'));t.appendChild(el('div','sub',runMeta(run)));h1.appendChild(t);wrap.appendChild(h1);
   const pc=el('div','pcard');if(P.summary)pc.appendChild(el('p','sm',P.summary));
   if((P.taste_axes||[]).length){const ax=el('div','axes');for(const a of P.taste_axes){const d=el('div','axis');d.appendChild(el('b',null,a.axis));d.appendChild(el('span',null,a.value));if(a.evidence)d.appendChild(el('small',null,a.evidence));ax.appendChild(d)}pc.appendChild(ax)}
@@ -456,14 +458,13 @@ async function renderResult(){const box=$('#qaBox');let run=AIST&&AIST.latest;
   (R.top5||[]).forEach((x,i)=>{const it=x.item;const c=el('div','t5');c.appendChild(el('div','rk',String(i+1)));const bd=el('div','bd');
     const ti=el('div','ti',it?(it.author?it.author+' — ':'')+it.title:x.id);ti.onclick=()=>openItem(x.id);bd.appendChild(ti);if(it)bd.appendChild(el('div','mt',[it.section,it.bucket?LENL[it.bucket]:'',fmtH(it.hours,it.hours_exact),it.narrator,(DL[it.status]||DL.pending)[0],it.rstatus?'отзыв: '+STL[it.rstatus]:''].filter(Boolean).join(' · ')));
     bd.appendChild(el('div','wy',x.why));if(x.confidence!=null){const cf=el('div','conf');const cb=el('span','cb');const ii=el('i');ii.style.width=Math.round(x.confidence*100)+'%';cb.appendChild(ii);cf.appendChild(cb);cf.appendChild(el('span',null,'уверенность '+Math.round(x.confidence*100)+'%'));bd.appendChild(cf)}
-    const r=el('div','row');r.style.marginTop='4px';const o=el('button','ghost sm','Открыть карточку');o.onclick=()=>openItem(x.id);r.appendChild(o);r.appendChild(qBtn(it,true));if(it)r.appendChild(tgBtn(it,true));
-    if(it&&it.has_file){const pl=el('button','ghost sm','▶ слушать');pl.onclick=()=>post('/api/open',{item_id:it.id,what:'file'}).then(()=>toast('Открываю в плеере…')).catch(e=>toast(e.message,'err'));r.appendChild(pl)}bd.appendChild(r);c.appendChild(bd);wrap.appendChild(c)});
+    const r=actsEl(it?tgBtn(it,true):null,it?moreBtn(()=>bookMenu(it),true):mkBtn({icon:'file',label:'Открыть карточку',small:true,onClick:()=>openItem(x.id)}));r.classList.add('plain');r.style.marginTop='4px';bd.appendChild(r);c.appendChild(bd);wrap.appendChild(c)});
   if((R.outside_library||[]).length){const h3=el('div','arh');h3.appendChild(el('h3',null,'Вне библиотеки'));h3.appendChild(el('span','sub','Claude проверял наличие аудиокниг в интернете'));wrap.appendChild(h3);const ol=el('div','olist');
     for(const o of R.outside_library){const c=el('div','oc');c.appendChild(el('div','ti',(o.author?o.author+' — ':'')+'«'+o.title+'»'));c.appendChild(el('div','wy',o.why));if(o.where_to_find){const w=el('div','wf');w.appendChild(document.createTextNode('Где найти: '));linkify(w,o.where_to_find);c.appendChild(w)}ol.appendChild(c)}wrap.appendChild(ol)}
   if((R.questions_to_refine||[]).length){const p=el('div','panel');p.appendChild(el('h3',null,'Что уточнить, чтобы подбор стал точнее'));const ol=el('ol','qq');R.questions_to_refine.forEach(q=>ol.appendChild(el('li',null,q)));p.appendChild(ol);
     p.appendChild(el('p','sub','Ответьте в анкете (например, в комментариях) или просто оцените пару книг — и запросите новый топ-5.'));wrap.appendChild(p)}
   const act=el('div','qgo');const tx=el('div','tx');const nrev=(profCur()||{}).reviews||0;tx.innerHTML='<b>Новый топ-5 с учётом отзывов</b> — только по кнопке: Claude прочитает полный файл для ИИ этого профиля (все отзывы'+(nrev?' — сейчас '+nrev:'')+', анкету, прошлые советы) и не повторит без причины то, что уже советовал.';act.appendChild(tx);
-  const rb=el('button','bigbtn','Новый топ-5 с учётом отзывов');rb.onclick=()=>{rb.disabled=true;startAi('refresh').catch(()=>{rb.disabled=false})};act.appendChild(rb);const eb=el('button','ghost','Изменить анкету');eb.onclick=()=>{QMODE='form';QSTEP=0;renderAnketa()};act.appendChild(eb);wrap.appendChild(act);
+  const rb=el('button','bigbtn','Новый топ-5 с учётом отзывов');rb.onclick=()=>{rb.disabled=true;startAi('refresh').catch(()=>{rb.disabled=false})};act.appendChild(rb);act.appendChild(mkBtn({icon:'pencil',label:'Изменить анкету',cls:'btn',onClick:()=>{QMODE='form';QSTEP=0;renderAnketa()}}));wrap.appendChild(act);
   if((run.notes||[]).length){const d=el('details');d.appendChild(el('summary','sub','Проверка ответа ('+run.notes.length+')'));const u=el('ul','qq');u.style.fontSize='12.5px';run.notes.forEach(n=>u.appendChild(el('li',null,n)));d.appendChild(u);wrap.appendChild(d)}
   const hist=(AIST.history||[]);if(hist.length){const p=el('div','panel');p.appendChild(el('h3',null,'История подборов ('+hist.length+')'));const hl=el('div','hlist');
     for(const h of hist){const b=el('button','hrow'+(h.id===run.id?' on':''));b.appendChild(el('span','d',fmtDT(h.started)));b.appendChild(el('span','k',h.kind==='plus1'?'+1 по запросу':h.kind==='refresh'?'пересмотр':'по анкете'));b.appendChild(el('span','t',(h.kind==='plus1'&&h.wish?'«'+h.wish+'» → ':'')+(h.titles.join(' · ')||h.error||'')));
@@ -472,20 +473,20 @@ async function renderResult(){const box=$('#qaBox');let run=AIST&&AIST.latest;
 function renderBrief(){const box=$('#qaBox');box.innerHTML='';const p=el('div','qcard');p.appendChild(el('h3','qt','Анкета этого профиля — бриф'));
   p.appendChild(el('p','sub','Для профиля «'+(profCur()||{}).name+'» анкету заменяет бриф из BRIEF-COMMON.md (раздел «Кто слушатель») — он считается уже заполненной анкетой. Можно сразу составить профиль и топ-5 или дополнить бриф анкетой.'));
   p.appendChild(el('div','brief',(QA.answers||{}).brief||''));const r=el('div','row');r.style.marginTop='10px';const go=el('button','bigbtn','Составить профиль и топ-5');go.onclick=()=>{go.disabled=true;startAi('initial').catch(()=>{go.disabled=false})};r.appendChild(go);
-  const f=el('button','ghost','Пройти анкету (дополнить бриф)');f.onclick=()=>{QMODE='form';QSTEP=0;renderAnketa()};r.appendChild(f);p.appendChild(r);box.appendChild(p)}
+  r.appendChild(mkBtn({icon:'pencil',label:'Пройти анкету (дополнить бриф)',cls:'btn',onClick:()=>{QMODE='form';QSTEP=0;renderAnketa()}}));p.appendChild(r);box.appendChild(p)}
 function renderProblem(){const box=$('#qaBox');box.innerHTML='';const h=(AIST&&AIST.history||[])[0];const p=el('div','problem');p.appendChild(el('div','tx','Подбор не получился: '+((h&&h.error)||'неизвестная ошибка')+'. Анкета сохранена.'));
-  const r=el('button','btn primary','Попробовать ещё раз');r.onclick=()=>{r.disabled=true;startAi(h&&h.kind||'initial').catch(()=>{r.disabled=false})};p.appendChild(r);const f=el('button','ghost','К анкете');f.onclick=()=>{QMODE='form';renderAnketa()};p.appendChild(f);box.appendChild(p);
+  const r=mkBtn({icon:'refresh',label:'Попробовать ещё раз',cls:'btn primary'});r.onclick=()=>{setBusy(r,true);startAi(h&&h.kind||'initial').catch(()=>{setBusy(r,false)})};p.appendChild(r);p.appendChild(mkBtn({label:'К анкете',cls:'btn',onClick:()=>{QMODE='form';renderAnketa()}}));box.appendChild(p);
   if(AIST.latest){const b=el('button','linkbtn','Показать прошлый удачный подбор');b.onclick=()=>{QMODE='result';renderAnketa()};box.appendChild(b)}}
 
 /* ---------- pinned block in «Что дальше» ---------- */
 async function loadAiPinned(){const my=PROFILE;try{AIST=await api('/api/ai/status');if(my!==PROFILE)return;paintPinned();if(AIST.job)aiTick()}catch(e){$('#nxAi').innerHTML=''}}
 function paintPinned(){if(typeof fdChatMount==='function')fdChatMount();const box=$('#nxAi');box.innerHTML='';const s=AIST;if(!s)return;const r=s.latest;
-  if(s.job&&s.job.kind!=='plus1'){const p=el('div','aipin slim');p.appendChild(el('div','tx','Claude '+(s.job.kind==='refresh'?'пересматривает топ-5':'составляет профиль и топ-5')+' · '+mmss(s.job.elapsed)+' · '+s.job.phase));const b=el('button','ghost sm','Смотреть');b.onclick=()=>show('anketa');p.appendChild(b);box.appendChild(p);return}
-  if(!r){const p=el('div','aipin slim');p.appendChild(el('div','tx','Рекомендаций ИИ пока нет. Заполните анкету — Claude составит ваш профиль и топ-5 из библиотеки.'));const b=el('button','ghost','Открыть анкету');b.onclick=()=>show('anketa');p.appendChild(b);box.appendChild(p);return}
+  if(s.job&&s.job.kind!=='plus1'){const p=el('div','aipin slim');p.appendChild(el('div','tx','Claude '+(s.job.kind==='refresh'?'пересматривает топ-5':'составляет профиль и топ-5')+' · '+mmss(s.job.elapsed)+' · '+s.job.phase));p.appendChild(mkBtn({icon:'chev-r',label:'Смотреть',small:true,onClick:()=>show('anketa')}));box.appendChild(p);return}
+  if(!r){const p=el('div','aipin slim');p.appendChild(el('div','tx','Рекомендаций ИИ пока нет. Заполните анкету — Claude составит ваш профиль и топ-5 из библиотеки.'));p.appendChild(mkBtn({icon:'clipboard',label:'Открыть анкету',cls:'btn',onClick:()=>show('anketa')}));box.appendChild(p);return}
   const p=el('div','aipin');const hd=el('div','hd');hd.appendChild(el('h3',null,'Рекомендации ИИ ('+new Date(r.finished).toLocaleDateString('ru-RU',{day:'numeric',month:'short'})+')'));
-  hd.appendChild(el('span','sub',runMeta(r)));hd.appendChild(el('span','spacer'));const more=el('button','ghost sm','Профиль и подробности');more.onclick=()=>{QMODE='result';VIEWRUN=null;show('anketa')};hd.appendChild(more);
-  const nb=el('button','ghost sm','Новый топ-5 с учётом отзывов');nb.title='Использует Claude (через Claude Code) и интернет; только по кнопке';nb.onclick=()=>{nb.disabled=true;startAi('refresh').catch(()=>{nb.disabled=false})};hd.appendChild(nb);p.appendChild(hd);
+  hd.appendChild(el('span','sub',runMeta(r)));hd.appendChild(el('span','spacer'));hd.appendChild(mkBtn({icon:'file',label:'Профиль и подробности',small:true,onClick:()=>{QMODE='result';VIEWRUN=null;show('anketa')}}));
+  const nb=mkBtn({icon:'refresh',label:'Новый топ-5 с учётом отзывов',small:true,title:'Использует Claude (через Claude Code) и интернет; только по кнопке'});nb.onclick=()=>{setBusy(nb,true);startAi('refresh').catch(()=>{setBusy(nb,false)})};hd.appendChild(nb);p.appendChild(hd);
   (r.result.top5||[]).forEach((x,i)=>{const it=x.item;const row=el('div','pi');row.appendChild(el('div','n',String(i+1)));const b=el('div','b');const t=el('div','t',it?(it.author?it.author+' — ':'')+it.title:x.id);t.onclick=()=>openItem(x.id);b.appendChild(t);
-    b.appendChild(el('div','w',x.why));row.appendChild(b);if(it&&it.rstatus&&it.rstatus!=='want')row.appendChild(el('span','badge',STL[it.rstatus]));else row.appendChild(qBtn(it,true));if(it)row.appendChild(tgBtn(it,true));p.appendChild(row)});
+    b.appendChild(el('div','w',x.why));row.appendChild(b);if(it&&it.rstatus&&it.rstatus!=='want')row.appendChild(el('span','badge',STL[it.rstatus]));if(it)row.appendChild(actsEl(tgBtn(it,true),moreBtn(()=>bookMenu(it),true)));p.appendChild(row)});
   box.appendChild(p);const hint=el('p','sub','Ниже — детерминированный подбор по формуле, без ИИ.');hint.style.margin='2px 0 0';box.appendChild(hint)}
 '''

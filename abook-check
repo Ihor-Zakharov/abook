@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 HOME = Path.home() / "abook"
-STATE = HOME / "state.json"
+STATE = Path(os.environ.get("ABOOK_STATE") or HOME / "state.json")   # $ABOOK_STATE — тестовая копия, как у `abook --state`
 MANIFEST_FILES = sorted((HOME / "manifests").glob("*.json")) + [HOME / "F-buldakov-top.json"]
 FULL_CATALOG = "F-buldakov.json"          # весь каталог Булдакова — ищем в нём последним
 ESTIMATES = HOME / "text-estimates.json"

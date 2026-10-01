@@ -25,6 +25,7 @@ import json
 import math
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -34,6 +35,8 @@ from pathlib import Path
 
 HOME = Path.home() / "abook"
 VENV = Path(os.environ.get("ABOOK_VEC_VENV") or HOME / ".venv-vec")
+# окружение с CUDA (onnxruntime-gpu, ≈ 2,5 ГБ) — на D:, чтобы не раздувать WSL-диск на C:; если есть — берётся оно
+GPU_VENV = Path(os.environ.get("ABOOK_VEC_GPU_VENV") or "/mnt/d/VideoDownloader/.venv-vec-gpu")
 MODEL = os.environ.get("ABOOK_VEC_MODEL") or "intfloat/multilingual-e5-small"
 MODELS_DIR = VENV / "models"
 RRF_K = 60
@@ -56,7 +59,18 @@ def daemon_main(db_path, model):
         with contextlib.suppress(Exception):                  # повторная регистрация — не ошибка
             TextEmbedding.add_custom_model(model=model, pooling=PoolingType.MEAN, normalization=True,
                                            sources=ModelSource(hf=model), dim=384, model_file="onnx/model.onnx")
-    emb = TextEmbedding(model, cache_dir=str(MODELS_DIR), threads=os.cpu_count())
+    providers = None
+    with contextlib.suppress(Exception):
+        import onnxruntime as _ort                                  # noqa: PLC0415
+        if hasattr(_ort, "preload_dlls"):
+            _ort.preload_dlls()                  # CUDA/cuDNN из pip-пакетов nvidia-* в этом же окружении (без системного CUDA)
+        if "CUDAExecutionProvider" in _ort.get_available_providers() and os.environ.get("ABOOK_VEC_CPU") != "1":
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    emb = (TextEmbedding(model, cache_dir=str(MODELS_DIR), providers=providers) if providers else
+           TextEmbedding(model, cache_dir=str(MODELS_DIR), threads=os.cpu_count()))
+
+    def providers_used():
+        return bool(providers)
     qp, dp = _prefixes(model)
     lock = threading.Lock()
     st = {"keys": [], "pos": {}, "M": np.zeros((0, 384), np.float32), "todo": 0, "done": 0, "busy": False,
@@ -68,7 +82,7 @@ def daemon_main(db_path, model):
         return c
 
     def vecs(texts, prefix):
-        return np.asarray(list(emb.embed([prefix + t for t in texts], batch_size=32)), dtype=np.float32)
+        return np.asarray(list(emb.embed([prefix + t for t in texts], batch_size=256 if providers else 32)), dtype=np.float32)
 
     def load():
         c = db()
@@ -102,8 +116,9 @@ def daemon_main(db_path, model):
         t0, n0 = time.time(), 0
         c = db()
         try:
-            for i in range(0, len(todo), 64):
-                ch = todo[i:i + 64]
+            step = 512 if providers_used() else 64      # на видеокарте — крупные пачки
+            for i in range(0, len(todo), step):
+                ch = todo[i:i + step]
                 V = vecs([d[3] for d in ch], dp)
                 with c:
                     c.executemany("INSERT OR REPLACE INTO vec_items(kind, ref_id, model, sig, blob) VALUES(?,?,?,?,?)",
@@ -356,7 +371,7 @@ _DLOCK = threading.Lock()
 
 
 def _python():
-    p = os.environ.get("ABOOK_VEC_PY") or str(VENV / "bin" / "python")
+    p = os.environ.get("ABOOK_VEC_PY") or str((GPU_VENV if (GPU_VENV / "bin" / "python").exists() else VENV) / "bin" / "python")
     return p if os.path.exists(p) else None
 
 
@@ -371,7 +386,9 @@ def _db_path(conn):
 
 def _start(dbp):
     py = _python()
-    proc = subprocess.Popen([py, os.path.abspath(__file__), "--daemon", "--db", dbp, "--model", MODEL],
+    # низкий приоритет: расчёт индекса не мешает остальному компьютеру (уступает ядра, когда они нужны)
+    nice = ["nice", "-n", "15"] if shutil.which("nice") and os.environ.get("ABOOK_VEC_NICE", "1") != "0" else []
+    proc = subprocess.Popen(nice + [py, os.path.abspath(__file__), "--daemon", "--db", dbp, "--model", MODEL],
                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
                             bufsize=1, start_new_session=True)
     hello = proc.stdout.readline()          # загрузка модели ≈ 1–3 с (первый раз — ещё скачивание ≈ 470 МБ)
@@ -732,10 +749,49 @@ def foryou(conn, pid, k=20, q=""):
     hit = _FORYOU.get(key)
     if hit and time.time() - hit[0] < FORYOU_TTL:
         return {**hit[1], "cached": True}
+    # постоянный кэш в базе: после перезапуска — сразу прошлый подбор, свежий считается в фоне
+    with contextlib.suppress(Exception):
+        conn.execute("CREATE TABLE IF NOT EXISTS foryou_cache(pid INTEGER, k INTEGER, q TEXT, created REAL, data TEXT, "
+                     "PRIMARY KEY(pid, k, q))")
+        row = conn.execute("SELECT created, data FROM foryou_cache WHERE pid=? AND k=? AND q=?", (pid, k, q)).fetchone()
+        if row and not _FORYOU_DIRTY.get(pid):
+            data = json.loads(row[1])
+            _FORYOU[key] = (row[0], data)
+            if time.time() - row[0] > FORYOU_TTL and key not in _FORYOU_BUSY:
+                _FORYOU_BUSY.add(key)
+                threading.Thread(target=_foryou_bg, args=(_db_path(conn), pid, k, q), daemon=True).start()
+            return {**data, "cached": True, "age_s": round(time.time() - row[0])}
+    return _foryou_compute(conn, pid, k, q)
+
+
+_FORYOU_BUSY = set()
+_FORYOU_DIRTY = {}
+
+
+def _foryou_bg(dbp, pid, k, q):
+    c = sqlite3.connect(dbp, timeout=30)
+    c.row_factory = sqlite3.Row
+    try:
+        _foryou_compute(c, pid, k, q)
+    except Exception:
+        pass
+    finally:
+        c.close()
+        _FORYOU_BUSY.discard((pid, k, q))
+
+
+def _foryou_compute(conn, pid, k, q):
+    import abook_rank as R   # noqa: PLC0415
+    key = (pid, k, q)
     res = R.rank(conn, pid, q, k=k + 8, mode="foryou")
     items = [x for x in res.get("items") or [] if not _BAD_AUTHOR.match(str(x.get("author") or "").strip())][:k]
     res.update(items=items, k=k, signals=len(R.profile(conn, pid)["pos"]))
     _FORYOU[key] = (time.time(), res)
+    _FORYOU_DIRTY.pop(pid, None)
+    with contextlib.suppress(Exception):
+        conn.execute("INSERT OR REPLACE INTO foryou_cache(pid, k, q, created, data) VALUES(?,?,?,?,?)",
+                     (pid, k, q, time.time(), json.dumps(res, ensure_ascii=False, default=str)))
+        conn.commit()
     return res
 
 
@@ -748,6 +804,8 @@ _BAD_AUTHOR = re.compile(r"^(ии|ai|нейросеть|неизвестен|unk
 def foryou_reset(pid=None):
     for key in [k for k in _FORYOU if pid is None or k[0] == pid]:
         _FORYOU.pop(key, None)
+    if pid is not None:
+        _FORYOU_DIRTY[pid] = True          # реакция/анкета: сохранённый в базе подбор устарел — пересчитать
 
 
 # ------------------------------------------------------------------ кандидаты для RAG консультанта

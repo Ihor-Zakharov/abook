@@ -33,7 +33,7 @@ SUMMARY_STEP = 4               # пересчитать резюме, когда
 HALF_LIFE = {"taste": 365, "dislike": 365, "context": 14, "not_interested": 730}
 MMR_LAMBDA = 0.7
 MEM_MODEL = "haiku"
-BUDGET = {"rules": 6000, "profile": 9000, "memory": 1600, "known": 2500, "links": 3500, "candidates": 7000,
+BUDGET = {"rules": 6000, "profile": 9000, "memory": 1600, "known": 2500, "links": 3500, "assoc": 2500, "candidates": 7000,
           "summary": 1200, "history": 3000, "message": 2200}
 CHARS_PER_TOKEN = 3.3          # русский текст у Claude: ≈ 3–3.5 символа на токен
 

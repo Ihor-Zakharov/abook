@@ -1251,6 +1251,8 @@ def _probe_knigavuhe(c):
         c["urls"], c["type"] = [t["url"] for t in good], "files"
         pr.update(parts=len(good), unavailable=len(bad), titles=[t["title"] for t in good],
                   duration=sum(float(t["duration"] or 0) for t in good) or None)
+        if all(t.get("duration") for t in good):      # длительность каждого трека — abook get сверит с ней части
+            pr["part_durations"] = [float(t["duration"]) for t in good]
         pr["order"] = A().title_order_problem(pr["titles"])
         req = urllib.request.Request(good[0]["url"], method="HEAD", headers={"User-Agent": F.UA})
         urllib.request.urlopen(req, timeout=F.HTTP_TIMEOUT).close()
@@ -1288,6 +1290,7 @@ def enqueue_row(conn, key):
     item = {"id": iid, "section": "Аудиоспектакли/По запросу" if kind == "radioplay" else F.UI_SECTION,
             "author": author, "title": title, "narrator": r["reader"] or "", "kind": kind, "lang": r["lang"] or "ru",
             "urls": c["urls"], "duration_h": round(float(pr.get("duration") or 0) / 3600, 2) or None,
+            **({"part_durations": pr["part_durations"]} if len(pr.get("part_durations") or []) == len(c["urls"]) else {}),
             "source": f"{r['platform']} · {r['channel']}".strip(" ·"), "about": "", "why": "",
             "requested": {"query": "", "at": _now(), "catalog": r["source_id"], "found_by": ["каталог"]}}
     return F.enqueue(item, parts=pr.get("parts") or len(item["urls"]), source_key=r["source_id"])

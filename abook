@@ -640,6 +640,20 @@ def title_order_problem(titles):
     return "; ".join(bad[:2]) + more
 
 
+def title_gap_problem(titles):
+    """Пропущенные номера в пронумерованных частях («01, 03, 04…» — нет 02): текст или None.
+    Только простые одноуровневые номера; дубли номеров ловит title_order_problem/дубли источника."""
+    keys = [title_numbers(t) for t in titles]
+    nums = [k[-1] for k in keys if k and len(k) == 1]
+    n = len(titles)
+    if n < 2 or len(nums) < max(2, math.ceil(ORDER_MIN_FRACTION * n)) or nums != sorted(nums):
+        return None
+    missing = sorted(set(range(nums[0], nums[-1] + 1)) - set(nums))
+    if not missing or len(missing) > max(3, n):
+        return None
+    return f"в нумерации частей нет номеров {', '.join(map(str, missing[:10]))} — возможно, части не хватает"
+
+
 def order_and_check_parts(parts, item):
     """Sort parts by (url_index, playlist_index) and refuse duplicates, playlist gaps and
     numbered titles that go backwards (unless the manifest says "order_ok": true)."""
@@ -901,7 +915,9 @@ def check_merged_file(path, part_durations, expected_payload=None):
     problems = []
     pr = probe_media(path)
     real, total = pr["duration"], sum(part_durations)
-    tol = max(2.0, total * 0.02)
+    # допуск — на стыки, а не процентом от длины: 2 % от 10-часовой книги = 12 минут, в них пряталась бы
+    # потерянная часть стыка. Реальное расхождение склейки (priming/padding AAC и mp3) — десятки мс на стык.
+    tol = 1.0 + 0.1 * len(part_durations)
     if abs(real - total) > tol:
         problems.append(f"длительность {real:.1f} с ≠ сумме частей {total:.1f} с (допуск {tol:.1f} с)")
     problems += chapter_problems(pr["chapters"], part_durations)
@@ -1166,8 +1182,10 @@ def download_parts_direct(item, urls, stage, bitrate):
     import functools
     iid = item["id"]
     parts = []
+    exp = item.get("part_durations") or []     # длительности файлов по площадке — для проверки на обрезку
     for ui, url in enumerate(urls):
-        entries = [{"playlist_index": None, "url": url, "title": None, "duration": None}]
+        ed = exp[ui] if ui < len(exp) and len(exp) == len(urls) else None
+        entries = [{"playlist_index": None, "url": url, "title": None, "duration": ed}]
         if is_playlist_url(url):
             res, err = download_url_with_retry(url, stage, bitrate, runner=ytdlp_list_playlist)
             if res is None:
@@ -1406,6 +1424,9 @@ def _process_item_body(item, item_stage, bitrate, engine, fmt, final_name):
     real_duration, sha = chk["duration"], chk["sha256"]
 
     warnings = chk["warnings"] + short_part_warnings(durations)
+    gap = None if item.get("gaps_ok") else title_gap_problem([p.get("title") or "" for p in parts])
+    if gap:
+        warnings.append(gap)
     w = manifest_duration_warning(real_duration, item.get("duration_h"))
     if w:
         warnings.append(w)
@@ -1436,7 +1457,8 @@ def _process_item_body(item, item_stage, bitrate, engine, fmt, final_name):
             checksums_update({rel: sha})
         except Exception as e:
             log(f"[{iid}] WARN: {CHECKSUMS_NAME} not updated: {e}")
-    shutil.rmtree(item_stage, ignore_errors=True)
+    if not os.environ.get("ABOOK_KEEP_STAGING"):     # тесты целостности: оставить части для сверки стыков
+        shutil.rmtree(item_stage, ignore_errors=True)
 
     state_replace_item(iid, {
         "status": "done",
@@ -4830,6 +4852,9 @@ def cmd_review(args):
                     import abook_vec as _V
                     c2 = db_connect()
                     try:
+                        st = _V.status(c2) if hasattr(_V, "status") else {}
+                        if (st.get("daemon") or {}).get("todo") == 0 and st.get("indexed_all"):
+                            return                       # индекс готов — демон поднимется на первом поиске
                         _V.call(c2, "embed", texts=["прогрев"], query=True)
                         _V.ensure_sync(c2)
                     finally:
@@ -4926,6 +4951,16 @@ a:hover{text-decoration-color:var(--el-a)}
 body.pal-open .app{opacity:0}
 .app{position:relative;z-index:1;display:grid;grid-template-columns:var(--rail-w) minmax(0,1fr);min-height:100dvh}
 
+/* home: the hero's stat tiles and the search portal already carry the kit's cursor light (.field-body); the quick panels under
+   the hero get the same light via [data-glow] (see .quick) */
+/* ---------- loading screen: mirrors desktop/splash (black, a 120 px mark centred, the caption 28 px under it) — the shell's
+   splash and this screen are one picture; it fades over --t-slow once the scene and the first data are ready ---------- */
+.boot{position:fixed;inset:0;z-index:300;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:28px;background:var(--bg);color:var(--ink-3);
+  font:15px/1.5 var(--font-text);letter-spacing:.04em;user-select:none;transition:opacity var(--t-slow) var(--ease-out)}
+.boot.off{opacity:0;pointer-events:none}
+.boot-mark{width:120px;height:120px;border-radius:50%;background:radial-gradient(var(--bg) 55%,var(--s4) 66%,var(--ink-3) 70%);box-shadow:0 0 0 3px var(--white-hot),var(--white-glow)}
+.boot-t{color:var(--ink-3)}
+.boot-meter{width:160px;margin:-8px 0 0;height:2px;opacity:.7}
 /* ---------- rail: one icon column on every screen (the user chose the chat's rail for the whole app). 72 px wide, fits a
    760 px window without scrolling; names come as a tooltip to the right on hover and keyboard focus; counts sit in the
    icon's corner. Nothing in the rail scrolls — at a tiny height the list simply clips ---------- */
@@ -4960,6 +4995,11 @@ body.pal-open .app{opacity:0}
 .proc .pl{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0}.proc .pl span{display:none}
 .proc .pl b{font:500 10.5px/1 var(--font-mono);color:var(--ink);font-weight:500;font-variant-numeric:tabular-nums}
 .proc .meter{margin:0;height:3px}
+.proc{position:relative}.proc .pl{width:100%;border-radius:var(--r-s);cursor:default}.proc .pl.go{cursor:pointer}
+.proc .px{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;background:var(--s3);color:var(--ink-2);opacity:0;transition:opacity var(--t-fast)}
+.proc .px svg{width:11px;height:11px}.proc:hover .px,.proc:focus-within .px{opacity:1}.proc .px:hover{color:var(--ink);background:var(--s4)}
+.proc-more{width:46px;height:28px;border-radius:var(--r-s);font:500 11px/1 var(--font-mono);color:var(--ink-3);background:var(--s1);border:1px solid var(--line-1)}
+.proc-more:hover{color:var(--ink);background:var(--s3)}
 /* the tail of the rail: theme switch (the same choice lives in «Настройка») */
 .rtail{margin-top:auto;display:grid;gap:4px}
 .rtail .icon-btn{width:40px;height:36px;border-radius:var(--r-m)}
@@ -4996,6 +5036,11 @@ h2.vt{margin:0;font:700 clamp(26px,2.6vw,34px)/1.1 var(--font-display);letter-sp
 .quick{width:100%;max-width:1120px;padding:0 0 24px}
 .quick .cols{text-align:left;grid-template-columns:1fr}
 .quick .panel .ri{background:var(--s1)}
+/* home: the cursor light on the two panels and their rows (the kit's .card[data-glow] look, on tokens) */
+.panel[data-glow],.ri[data-glow]{position:relative;isolation:isolate}
+.panel[data-glow]::after,.ri[data-glow]::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;z-index:-1;transition:opacity var(--t-base) var(--ease-out);
+  background:radial-gradient(380px circle at var(--mx,50%) var(--my,50%),color-mix(in oklab,var(--ink) 9%,transparent),color-mix(in oklab,var(--ink) 3%,transparent) 40%,transparent 75%)}
+@media (hover:hover){.panel[data-glow]:hover::after,.ri[data-glow]:hover::after{opacity:1}}
 
 /* ---------- book card ---------- */
 .bookcard{position:relative;display:flex;flex-direction:column;gap:22px;width:min(var(--card-w,620px),100%);margin:12px 0 0;padding:28px 28px 24px;border-radius:var(--r-xl);background:linear-gradient(180deg,rgba(255,226,180,.035),transparent 36%),var(--plate);border:1px solid var(--line-2);box-shadow:var(--shadow)}
@@ -5040,6 +5085,7 @@ h2.vt{margin:0;font:700 clamp(26px,2.6vw,34px)/1.1 var(--font-display);letter-sp
 .hv .h{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font:500 12px/1.5 var(--font-mono);color:var(--ink-3)}
 .hv .tx{white-space:pre-wrap;color:var(--ink-2);font-size:13.5px;margin-top:6px}
 .hv button{margin-left:auto}
+.modal-actions{align-items:center}
 .lbl{font:600 14.5px/1.35 var(--font-text);color:var(--ink);margin-bottom:10px;display:flex;justify-content:space-between;align-items:baseline;gap:8px}   /* a label people read: text, not caps (UX §3) */
 .lbl #dialVal{font:600 22px/1 var(--font-display);letter-spacing:-.02em;text-transform:none;color:var(--ink);font-variant-numeric:tabular-nums}
 /* rating dial: a segmented meter; its radiation step follows the score (ember → gold → white → ice → violet) */
@@ -5053,7 +5099,9 @@ h2.vt{margin:0;font:700 clamp(26px,2.6vw,34px)/1.1 var(--font-display);letter-sp
 .sb{display:flex;flex-direction:column;gap:7px}
 .sb .top{display:flex;justify-content:space-between;align-items:center}
 .sb .v{color:var(--ink);font:500 12px/1 var(--font-mono)}
-.sb .x{color:var(--ink-3);padding:0 4px;margin-left:2px}.sb .x:hover{color:var(--err)}.sb .x[hidden]{display:inline;visibility:hidden}
+.sb .x{display:inline-grid;place-items:center;width:22px;height:20px;border-radius:var(--r-xs);color:var(--ink-3);margin-left:2px}.sb .x:hover{color:var(--err)}.sb .x[hidden]{display:inline-grid;visibility:hidden}
+.sb .x svg,.qrow .x svg,.x svg{width:14px;height:14px}
+table.lib td.tdacts{white-space:nowrap;padding-top:5px;padding-bottom:5px}
 .sb .v.pv{color:var(--el-a)}
 /* subscore: 10 segments = 1..10; the whole segment under the pointer is the value (drag to the left edge = 0).
    The hit area is 32px tall around the 12px strip; hover previews the value dimmer, click/drag commits it. */
@@ -5109,6 +5157,12 @@ select.in.dd-src{display:none}
 .dd-menu button.act{background:var(--surface-2);color:var(--ink)}
 .dd-menu button[aria-selected="true"]{color:var(--ink);font-weight:500}.dd-menu button[aria-selected="true"] svg{opacity:1}
 .dd-menu hr{border:0;border-top:1px solid var(--line-1);margin:5px 4px}
+/* the «⋯» action menu: the same plate, every item with an icon from the sprite (or an empty slot — labels stay aligned) */
+.dd-menu.ctx button{color:var(--ink);font-weight:500;font-size:13.5px}
+.dd-menu.ctx button svg{opacity:1;color:var(--ink-2)}.dd-menu.ctx button .ic{width:15px;flex:none}
+.dd-menu.ctx button:hover,.dd-menu.ctx button:focus-visible{background:var(--surface-2);outline:none}.dd-menu.ctx button:hover svg,.dd-menu.ctx button:focus-visible svg{color:var(--ink)}
+.dd-menu.ctx button:disabled{opacity:.4;cursor:default;background:none}
+.dd-menu.ctx button[aria-checked="true"] svg{color:var(--ink)}
 .in.sm{height:34px;font-size:13px}
 input[type=date].in{height:36px;font:500 12.5px/1 var(--font-mono);width:150px;color-scheme:dark}
 textarea.in{width:100%;height:auto;min-height:130px;padding:10px 12px;resize:vertical;line-height:1.55;font-size:14.5px}
@@ -5121,21 +5175,55 @@ textarea.in.q{min-height:64px}
 .grid label{display:flex;flex-direction:column;gap:6px;font:500 13.5px/1.3 var(--font-text);color:var(--ink-2)}
 .grid label .in{font:400 14px/1 var(--font-text);color:var(--ink)}
 .btn.primary .k{font:500 11px/1 var(--font-mono);opacity:.55;margin-left:2px}
+/* ---------- buttons: one system on top of the kit ----------
+   Tiers: .btn.primary — one per screen, card and dialog · .btn — a plate for panels, forms and dialogs (40 px) ·
+   .ghost — the action of a list row (36 px; .sm 32 px in dense rows and tables) · .ghost.ico / .icon-btn — icon only, always with
+   aria-label and title · .react — reactions under advice (kit, 28 px). Icons come only from the kit sprite, 16 px (15 in .sm).
+   States: hover lightens the plate; focus — the kit ring; pressed — aria-pressed / .on (inset rim, full ink); disabled — faded and the
+   title says why; busy — the kit spinner over the label with the width locked (buttonState), never a text swap; done — a ✓ icon in
+   the same slot, no colour; a menu button carries aria-expanded and turns its chevron. Nothing changes width between states. */
 .ghost{position:relative;display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;padding:0 13px;border-radius:var(--r-m);background:var(--s1);border:1px solid var(--line-2);
   color:var(--ink);font:500 13.5px/1 var(--font-text);white-space:nowrap;text-decoration:none;cursor:pointer;transition:background-color var(--t-fast),border-color var(--t-fast),color var(--t-fast)}
-@media (hover:hover){.ghost:hover{background:var(--s3);border-color:var(--line-3)}}
-.ghost svg{width:16px;height:16px}
-.ghost.on{background:var(--s4);border-color:var(--line-3)}
+@media (hover:hover){.ghost:hover{background:var(--s3);border-color:var(--line-3)}.ghost:hover svg{color:var(--ink)}}
+.ghost svg,.btn svg{width:16px;height:16px;flex:none;color:var(--ink-2);transition:color var(--t-fast)}
+.btn.primary svg{color:inherit}
+.ghost.on,.ghost[aria-pressed="true"],.btn[aria-pressed="true"]:not(.primary){background:var(--s4);border-color:var(--line-3)}
+.ghost.on svg,.ghost[aria-pressed="true"] svg,.btn[aria-pressed="true"] svg,.ghost.done svg{color:var(--ink)}
 .ghost.sm{height:32px;padding:0 10px;font-size:13px;border-radius:var(--r-s)}
-.ghost.more{width:36px;padding:0;font:600 16px/1 var(--font-text);letter-spacing:.04em;color:var(--ink-2)}.ghost.sm.more{width:32px}
-.ghost.danger{color:var(--ink-2)}.ghost.danger:hover{color:var(--err)}
+.ghost.sm svg{width:15px;height:15px}
+.ghost.ico{width:36px;padding:0}.ghost.sm.ico{width:32px}
+.ghost .chev,.btn .chev{width:14px;height:14px;margin:0 -5px 0 -3px;color:var(--ink-3);transition:transform var(--t-base) var(--ease-out),color var(--t-fast)}
+.ghost[aria-expanded="true"],.btn[aria-expanded="true"]:not(.primary){background:var(--s3);border-color:var(--line-3)}
+.ghost[aria-expanded="true"] .chev,.btn[aria-expanded="true"] .chev{transform:rotate(180deg);color:var(--ink)}
+.ghost.done{color:var(--ink-2)}
+.ghost.danger{color:var(--ink-2)}.ghost.danger:hover{color:var(--err)}.btn.danger:not(.solid){color:var(--ink-2)}.btn.danger:not(.solid):hover{color:var(--err)}
 .ghost:disabled,.btn:disabled{opacity:.36;cursor:not-allowed}
+.ghost.is-busy,.btn.is-busy{cursor:progress}
+.ghost .btn-label,.btn .btn-label{gap:inherit}
+/* a trailing ✓ with its slot reserved: the label never shifts when the mark toggles (Перечитать, Уже читал, в очереди) */
+.rc{width:14px;height:14px;margin:0 -4px 0 -1px;opacity:0;transition:opacity var(--t-fast)}
+[aria-pressed="true"]>.rc,[aria-pressed="true"]>.btn-label>.rc{opacity:1}
+.react .rc{width:13px;height:13px}
+/* row actions: every list row keeps its controls in one .acts group, vertically centred, 6 px apart; a thin gap between groups */
+.acts{display:flex;align-items:center;gap:6px;flex:none}
+.acts .gap{width:6px}
+.ri .acts{align-self:flex-start;height:46px}   /* centred on the 46 px score tile, i.e. on the title+meta block */
+.ri .acts.plain{height:auto;align-self:center}
+.icon-btn.row{width:32px;height:32px;border-radius:var(--r-s)}.icon-btn.row svg{width:16px;height:16px}
+.icon-btn.row:hover{background:var(--s3);color:var(--ink)}
+.rot svg{transform:rotate(180deg)}
+/* the foot of a windowed list: the counter and «Показать ещё» — always the last row, the rows above never move */
+.pagefoot{display:flex;align-items:center;justify-content:center;gap:14px;flex-wrap:wrap;min-height:40px;padding:6px 0 0}
+.pagefoot:empty{display:none}
+.pagefoot .sub{font-variant-numeric:tabular-nums}
+.ri .tt,.qi .tt{overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere}
 .spacer{flex:1}
 .warnbox{background:var(--s1);border:1px solid color-mix(in oklab,var(--err) 45%,transparent);color:var(--ink);border-radius:var(--r-m);padding:10px 14px;font-size:13.5px}
 .simbox{background:var(--s1);border:1px solid var(--line-2);border-radius:var(--r-m);padding:12px 14px;font-size:13.5px;color:var(--ink-2);display:flex;flex-direction:column;gap:8px}
 .simbox .it{display:flex;gap:10px;align-items:center}
-.cardfoot{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding-top:6px;border-top:1px solid var(--line-1)}
-.cardfoot .btn.primary{margin-top:14px}.cardfoot>.ghost{margin-top:14px}
+.cardfoot{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding-top:20px;border-top:1px solid var(--line-1)}
+/* the book's own actions under the title: one row of equal plates, the rare ones behind «⋯» */
+.cd-acts{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:14px}
 
 /* ---------- search palette ---------- */
 /* no backdrop of its own: all darkening is the scene's shaped shade (.cosmos-wrap.dim.soft), one layer with one timing */
@@ -5176,9 +5264,8 @@ textarea.in.q{min-height:64px}
 .tgq-t small{display:block;color:var(--ink-3);font:500 11.5px/1.45 var(--font-mono)}
 .tgq-problem .tgq-s,.tgq-error .tgq-s,.tgq-problem .tgq-note,.tgq-error .tgq-note{color:var(--err)}
 .tgq-bar{height:3px;border-radius:2px;background:var(--line-1);margin-top:5px;overflow:hidden}.tgq-bar i{display:block;height:100%;background:var(--ink-2);transition:width var(--t-base)}
-.tgq-a{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.tgq-a{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;align-items:center}
 @media (max-width:600px){.tgq-row{grid-template-columns:20px minmax(0,1fr)}.tgq-a{grid-column:2;justify-content:flex-start}}
-.ri>.tgb{margin-top:7px}   /* centred on the 46px score tile, i.e. on the title+meta block */
 .ri .tt{font-weight:500;font-size:15px;color:var(--ink)}
 .ri .mm{color:var(--ink-3);font:500 11.5px/1.5 var(--font-mono);margin-top:3px}
 .ri .sn{color:var(--ink-2);font-size:13.5px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;margin-top:6px;line-height:1.5}
@@ -5202,8 +5289,7 @@ textarea.in.q{min-height:64px}
 .qi .hd{cursor:grab;color:var(--ink-3);font-size:17px;user-select:none;padding:0 2px}
 .qi .n{color:var(--ink-3);width:24px;text-align:right;font:500 12px/1 var(--font-mono)}
 .qi .body{flex:1;min-width:0;cursor:pointer}
-.ib{width:32px;height:32px;border-radius:var(--r-s);display:inline-grid;place-items:center;color:var(--ink-2);background:transparent;border:1px solid var(--line-1);font-size:13px;transition:background-color var(--t-fast),color var(--t-fast)}
-@media (hover:hover){.ib:hover{color:var(--ink);background:var(--s3)}}
+.qi .acts .icon-btn.row{color:var(--ink-3)}.qi .acts .icon-btn.row:hover{color:var(--ink)}
 .why2{font-size:13px;margin-top:6px;display:flex;flex-direction:column;gap:3px}
 .why2 .p{color:var(--ink-2)}.why2 .n{color:var(--ink-3)}
 .panel{background:var(--plate);border:1px solid var(--line-1);border-radius:var(--r-l);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
@@ -5306,6 +5392,10 @@ td.path code{font-size:12px;color:var(--ink-3);word-break:break-all;background:n
 .sthint.stload{display:flex;flex-direction:column;align-items:center;gap:12px;width:min(440px,100%);margin:clamp(40px,18vh,180px) auto 0;text-align:center}.sthint.stload .meter{width:100%}
 </style></head>
 <body>
+<!-- loading screen: the same black field and the same mark in the same place as the desktop shell's splash, so the hand-off is one
+     picture; it stays until the scene texture is decoded, the shaders have drawn their first frames and the first data is in -->
+<div class="boot" id="boot" role="status" aria-live="polite"><div class="boot-mark" aria-hidden="true"></div><div class="boot-t">Запускаю аудиотеку…</div>
+  <div class="meter indet boot-meter" aria-hidden="true"><div class="meter-fill"></div><div class="meter-glow"></div></div></div>
 <div class="cosmos-wrap" id="cosmos-wrap" aria-hidden="true">
   <canvas class="cosmos" id="cosmos"></canvas>
   <div class="cosmos-fallback"></div>
@@ -5354,6 +5444,7 @@ td.path code{font-size:12px;color:var(--ink-3);word-break:break-all;background:n
       <p class="kicker" id="cK"></p>
       <h2 class="t" id="cT"></h2>
       <div class="m" id="cM"></div>
+      <div class="cd-acts" id="cActs" hidden></div>
     </div>
     <div id="customBox" hidden>
       <div class="grid">
@@ -5383,13 +5474,13 @@ td.path code{font-size:12px;color:var(--ink-3);word-break:break-all;background:n
     <div class="field area cd-text" data-accent="gold"><div class="field-ring"></div><div class="field-body"><textarea id="fText" aria-label="Впечатления" placeholder="Впечатления, свободный текст: что понравилось, что нет, чтец, ассоциации…"></textarea></div></div>
     <div class="quotes" id="fQuotes" hidden></div>
     <div class="warnbox" id="saveWarn" hidden></div>
-    <div class="cardfoot"><button class="btn primary" id="save">Сохранить <span class="k">Ctrl+Enter</span></button><button class="ghost" id="bQuote">+ Цитата</button><button class="ghost" id="bRelisten" aria-pressed="false">Перечитать</button>
-      <span class="spacer"></span><button class="ghost danger" id="bDel" hidden>Удалить отзыв</button></div>
+    <div class="cardfoot"><button class="btn primary" id="save">Сохранить <span class="k">Ctrl+Enter</span></button><button class="btn" id="bQuote"><svg aria-hidden="true"><use href="/kit/icons/sprite.svg#i-pencil"/></svg><span id="bQuoteL">Цитата</span></button><button class="btn" id="bRelisten" aria-pressed="false" title="Отметить книгу как ту, к которой хочется вернуться">Перечитать<svg class="rc" aria-hidden="true"><use href="/kit/icons/sprite.svg#i-check"/></svg></button>
+      <span class="spacer"></span><button class="btn danger" id="bDel" hidden><svg aria-hidden="true"><use href="/kit/icons/sprite.svg#i-trash"/></svg>Удалить отзыв</button></div>
   </article>
 </section>
 <dialog class="modal" id="cfm" aria-labelledby="cfmT"><div class="modal-box">
   <div class="drawer-head"><h3 id="cfmT"></h3></div><p class="modal-text" id="cfmB"></p>
-  <div class="modal-actions"><button class="ghost" id="cfmNo">Отмена</button><button class="btn solid danger" id="cfmYes">Удалить</button></div></div></dialog>
+  <div class="btn-row modal-actions"><button class="btn" id="cfmNo" type="button">Отмена</button><button class="btn solid danger" id="cfmYes" type="button">Удалить</button></div></div></dialog>
 
 <!-- МОИ ОТЗЫВЫ -->
 <section class="view" id="v-reviews" hidden>
@@ -5445,7 +5536,7 @@ td.path code{font-size:12px;color:var(--ink-3);word-break:break-all;background:n
 <section class="view" id="v-check" hidden>
   <header class="vh"><p class="kicker">проверка</p><h2 class="vt">Целы ли книги на диске</h2><p class="sub" id="ckSub"></p></header>
   <div class="safety" id="ckSafe" aria-label="Сохранность данных" aria-live="polite"></div>
-  <div class="row"><button class="btn primary" id="ckQuick">Быстрая проверка</button><button class="ghost" id="ckFull">Полная проверка (SHA-256)</button></div>
+  <div class="row"><button class="btn primary" id="ckQuick">Быстрая проверка</button><button class="btn" id="ckFull">Полная проверка (SHA-256)</button></div>
   <p class="sub row-center">Быстрая — наличие и размер файлов, секунды. Полная — SHA-256, декодирование, главы, тишина, сверка с длительностью у источника; минуты.</p>
   <div class="panel ckprog" id="ckProg" hidden><div id="ckProgT"></div><div class="meter" id="ckMeter"><div class="meter-fill"></div><div class="meter-glow"></div></div><div class="sub" id="ckCur">&nbsp;</div></div>
   <div id="ckTotals"></div>
@@ -5463,10 +5554,10 @@ td.path code{font-size:12px;color:var(--ink-3);word-break:break-all;background:n
   <div class="cols">
     <div class="panel"><h3>Файл для ИИ</h3><p class="sub">Один .md со всеми отзывами, анкетой и каталогом — для Claude или любого другого ИИ. Полный — всё; lite — без текстов отзывов.</p>
       <div class="row"><div class="seg sm" id="aiMode" role="radiogroup" aria-label="Вариант файла"><button data-m="full">полный</button><button data-m="lite">lite</button></div>
-        <button class="btn primary" id="aiDl"><svg><use href="/kit/icons/sprite.svg#i-download"/></svg>Пересобрать и скачать</button><button class="ghost" id="aiCopy"><svg><use href="/kit/icons/sprite.svg#i-clipboard"/></svg>Копировать в буфер</button></div>
+        <button class="btn primary" id="aiDl"><svg aria-hidden="true"><use href="/kit/icons/sprite.svg#i-download"/></svg>Пересобрать и скачать</button><button class="btn" id="aiCopy"><svg aria-hidden="true"><use href="/kit/icons/sprite.svg#i-clipboard"/></svg>Копировать в буфер</button></div>
       <p class="sub" id="aiMeta" hidden></p><p class="sub" id="exAiInfo"></p></div>
-    <div class="panel"><h3>Данные</h3><div class="row"><a class="ghost" href="/api/export/reviews.json">Отзывы · JSON</a><a class="ghost" href="/api/export/reviews.csv">Отзывы · CSV</a><a class="ghost" href="/api/export/library.csv">Библиотека · CSV</a></div>
-      <div class="row"><button class="ghost" id="exRebuild"><svg><use href="/kit/icons/sprite.svg#i-refresh"/></svg>Пересинхронизировать и пересобрать всё</button></div></div>
+    <div class="panel"><h3>Данные</h3><div class="row"><a class="btn" href="/api/export/reviews.json"><svg aria-hidden="true"><use href="/kit/icons/sprite.svg#i-download"/></svg>Отзывы · JSON</a><a class="btn" href="/api/export/reviews.csv"><svg aria-hidden="true"><use href="/kit/icons/sprite.svg#i-download"/></svg>Отзывы · CSV</a><a class="btn" href="/api/export/library.csv"><svg aria-hidden="true"><use href="/kit/icons/sprite.svg#i-download"/></svg>Библиотека · CSV</a></div>
+      <div class="row"><button class="btn" id="exRebuild"><svg aria-hidden="true"><use href="/kit/icons/sprite.svg#i-refresh"/></svg>Пересинхронизировать и пересобрать всё</button></div></div>
   </div>
   <div class="panel"><h3>Где лежат копии</h3><div class="bk" id="bkBox"></div></div>
   <div class="panel"><h3>Telegram</h3><p class="sub" id="tgInfo"></p><div class="tgq" id="tgQ"></div></div>
@@ -5490,7 +5581,7 @@ td.path code{font-size:12px;color:var(--ink-3);word-break:break-all;background:n
 <script type="module">
 'use strict';
 import { createCosmos } from '/kit/js/cosmos.js?kitv';
-import { Spring, attachButtons, attachPointerGlow, attachSwitches, moveInk, enter, exit, pushToast, dismissToast, openDialog, closeDialog } from '/kit/js/motion.js?kitv';
+import { Spring, attachButtons, attachPointerGlow, attachSwitches, moveInk, enter, exit, pushToast, dismissToast, openDialog, closeDialog, buttonState } from '/kit/js/motion.js?kitv';
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const norm=s=>(s||'').toLowerCase().replace(/ё/g,'е');
@@ -5513,6 +5604,57 @@ function toast(m,kind){const box=$('#toasts');const old=[...box.children].filter
   pushToast(box,{tone:kind==='err'?'err':kind==='warn'?'warn':'ok',text:m,ttl:kind?6000:2800})}
 const store={get(k,d){try{return localStorage.getItem(k)??d}catch(e){return d}},set(k,v){try{localStorage.setItem(k,v)}catch(e){}}};
 let META=null,VIEW='rate';
+
+/* ---------------- buttons: one system (see the CSS note at .ghost) ----------------
+   mkBtn({label, icon, small, cls, title, aria, pressed, menu, onClick}) → <button>: an icon from the kit sprite, a label, an optional
+   chevron for a menu button; icon-only buttons get aria-label + title from `aria`. setIcon / setPressed / setBusy change a state
+   in place — the width is locked, nothing jumps. ctxMenu items: {icon, label, title, disabled, checked, onClick} | '-'. */
+const ICON=n=>{const s=document.createElementNS('http://www.w3.org/2000/svg','svg');s.setAttribute('aria-hidden','true');const u=document.createElementNS('http://www.w3.org/2000/svg','use');u.setAttribute('href','/kit/icons/sprite.svg#i-'+n);s.appendChild(u);return s};
+function mkBtn(o){const b=el('button',o.cls||('ghost'+(o.small?' sm':'')+(o.label?'':' ico')));b.type='button';
+  if(o.icon)b.appendChild(ICON(o.icon));if(o.label)b.appendChild(document.createTextNode(o.label));
+  if(o.check){const c=ICON('check');c.classList.add('rc');b.appendChild(c)}
+  if(o.menu){if(o.label){const c=ICON('chev-d');c.classList.add('chev');b.appendChild(c)}b.setAttribute('aria-haspopup','menu');b.setAttribute('aria-expanded','false')}
+  if(o.aria){b.setAttribute('aria-label',o.aria);b.title=o.title||o.aria}else if(o.title)b.title=o.title;
+  if(o.pressed!=null)b.setAttribute('aria-pressed',String(!!o.pressed));if(o.disabled)b.disabled=true;
+  b.onmousedown=e=>e.stopPropagation();   // rows open on click: a button inside never selects or opens the row
+  if(o.menu)b.onclick=e=>{e.stopPropagation();ctxMenu(b,typeof o.menu==='function'?o.menu():o.menu)};
+  else if(o.onClick)b.onclick=e=>{e.stopPropagation();o.onClick(e,b)};
+  return b}
+const setIcon=(b,n)=>{const u=b.querySelector('use');if(u)u.setAttribute('href','/kit/icons/sprite.svg#i-'+n)};
+const setPressed=(b,on)=>b.setAttribute('aria-pressed',String(!!on));
+// busy: the kit spinner over the label, width locked; the reason or progress goes to the title. Idempotent: only a change animates.
+function setBusy(b,on,title){const st=on?'busy':'idle';if(b.dataset.state!==st)buttonState(b,st);if(title!=null)b.title=title;b.disabled=!!on&&b.dataset.busyLock!=='0'}
+// «⋯» — the rest of a row's actions in one menu (the main action is one button, not a row of five)
+const moreBtn=(items,small)=>mkBtn({icon:'dots',small,aria:'Ещё действия',menu:items});
+// a menu item made of a ready button (its label, state and handler) — for toggles that also live as buttons elsewhere
+const btnItem=(b,label,icon)=>b?{label:label||b.textContent,icon,title:b.title||'',disabled:b.disabled,checked:b.getAttribute('aria-pressed')==='true',onClick:()=>b.click()}:null;
+// row actions wrapper: one group per row, centred; `plain` — centred on the whole row instead of the score tile
+const actsEl=(...btns)=>{const a=el('div','acts');btns.flat().filter(Boolean).forEach(x=>a.appendChild(x));return a};
+
+/* ---------------- long lists: windows and the cache ----------------
+   pager(box, items, render, {page, key}) draws the first window and a foot «показано N из M · Показать ещё K» — more rows are appended
+   below (nothing above moves), the foot stays last. A re-render with the same `key` (same filters) keeps the window the user has
+   opened; a new key starts from the first page. Big lists never go to the DOM whole.
+   cache(key) / cacheSet(key, data): page memory first, then localStorage per profile (try/catch, ≤ 1.5 МБ a record) — a screen
+   opened again shows the last data at once and refreshes quietly in the background; nothing blinks «пусто → данные». */
+const PAGE=100;
+function pager(box,items,render,{page=PAGE,key='',foot:footEl,after,small}={}){const total=items.length;
+  const keep=box._pgKey===key?Math.max(page,box._pgN||0):page;box._pgKey=key;box.innerHTML='';
+  let n=0;const foot=footEl||el('div','pagefoot');if(footEl)foot.classList.add('pagefoot');
+  const draw=upTo=>{upTo=Math.min(total,upTo);const frag=document.createDocumentFragment();for(let i=n;i<upTo;i++){const r=render(items[i],i);if(r)frag.appendChild(r)}n=upTo;box._pgN=n;
+    if(!footEl&&foot.isConnected)box.insertBefore(frag,foot);else box.appendChild(frag);
+    foot.innerHTML='';if(total>page){foot.appendChild(el('span','sub',`показано ${n.toLocaleString('ru-RU')} из ${total.toLocaleString('ru-RU')}`));
+      if(n<total)foot.appendChild(mkBtn({icon:'chev-d',label:'Показать ещё '+Math.min(page,total-n).toLocaleString('ru-RU'),cls:small?'ghost sm':'btn',onClick:()=>draw(n+page)}));
+      if(!footEl&&!foot.isConnected)box.appendChild(foot)}
+    if(after)after(n,total)};
+  draw(keep);return {get n(){return n},more:()=>draw(n+page)}}
+const CACHE=new Map();
+const cacheKey=k=>'abook.cache.'+PROFILE+'.'+k;
+function cache(k){const ck=cacheKey(k);if(CACHE.has(ck))return CACHE.get(ck);try{const s=localStorage.getItem(ck);if(s){const v=JSON.parse(s);CACHE.set(ck,v);return v}}catch(e){}return null}
+function cacheSet(k,v){const ck=cacheKey(k);CACHE.set(ck,v);try{const s=JSON.stringify(v);if(s.length<1.5e6)localStorage.setItem(ck,s);else localStorage.removeItem(ck)}catch(e){}}
+// show what we have, then fetch: paint(cached) at once if the box is empty, paint(fresh) when it differs
+async function cached(k,fetcher,paint,{force}={}){const old=cache(k);if(old&&!force)paint(old,true);
+  try{const v=await fetcher();const same=old&&JSON.stringify(v)===JSON.stringify(old);cacheSet(k,v);if(!same||!old||force)paint(v,false);return v}catch(e){if(!old)throw e;return old}}
 
 /* ---------------- scene: the cosmos-kit black hole behind the whole app ----------------
    Composition follows the screen and the hole travels between them on a spring:
@@ -5590,12 +5732,21 @@ function sceneLive(){sceneWake();if(SC.swT)return;SC.api?.setEnergy(PROC.size?1:
 // plus a soft push; k 0.5–2 sets how long it stays awake. Visible on the star next to the card. Reduced motion: nothing.
 function kick(k){sceneWake();const a=SC.api;if(!a||!a.ok||REDUCED)return;clearTimeout(SC.swT);a.setEnergy(1);Reel.energy(1);a.spin?.(Math.min(1,k*.5));Reel.kick(k*.5);
   SC.swT=setTimeout(()=>{SC.swT=0;sceneLive()},900+k*700)}
-function paintProcs(){const box=$('#procs');box.hidden=!PROC.size;const seen=new Set();
+/* process tiles in the rail: {label, pct, go, cancel} — the tile is a door to its screen (go), the × cancels (cancel; the title
+   names what stops). At most 3 tiles are open; the rest fold into «ещё N» (click — unfold). One meter per process, no duplicates */
+const PROC_SCREEN={tg:'export',rebuild:'export',check:'check','fd-search':'find','fd-dl':'find','fd-map':'setup','fd-chat':'chat',ai:'anketa',qtext:'anketa',crawl:'setup',foryou:'chat'};
+let PROC_OPEN=false;
+function paintProcs(){const box=$('#procs');box.hidden=!PROC.size;const seen=new Set();let i=0;const MAX=3,fold=PROC.size>MAX+1&&!PROC_OPEN;
   for(const [id,p] of PROC){seen.add(id);let r=box.querySelector(`[data-proc="${id}"]`);
-    if(!r){r=el('div','proc');r.dataset.proc=id;r.innerHTML='<div class="pl"><i class="live-dot"></i><span></span><b></b></div><div class="meter"><div class="meter-fill"></div><div class="meter-glow"></div></div>';box.appendChild(r);enter(r,{dy:8,blur:4,scale:1,response:.5})}
+    if(!r){r=el('div','proc');r.dataset.proc=id;r.innerHTML='<button class="pl" type="button"><i class="live-dot"></i><span></span><b></b></button><div class="meter"><div class="meter-fill"></div><div class="meter-glow"></div></div>';
+      const x=mkBtn({icon:'x',cls:'px icon-btn small',aria:'Отменить'});x.hidden=true;r.appendChild(x);box.appendChild(r);enter(r,{dy:8,blur:4,scale:1,response:.5})}
     r.dataset.accent=p.accent||'white';r.querySelector('span').textContent=p.label;r.querySelector('b').textContent=p.pct!=null?Math.round(p.pct*100)+'%':'';
+    const go=p.go||PROC_SCREEN[id];const pl=r.querySelector('.pl');pl.dataset.tip=p.label+(go?' — открыть':'');pl.setAttribute('aria-label',p.label);pl.onclick=go?()=>show(go):null;pl.classList.toggle('go',!!go);
+    const x=r.querySelector('.px');x.hidden=!p.cancel;if(p.cancel){x.dataset.tip='Отменить: '+p.label;x.setAttribute('aria-label','Отменить: '+p.label);x.onclick=e=>{e.stopPropagation();p.cancel()}}
+    r.hidden=fold&&i>=MAX;i++;
     const m=r.querySelector('.meter');m.classList.toggle('indet',p.pct==null);m.style.setProperty('--p',p.pct==null?1:p.pct)}
-  box.querySelectorAll('[data-proc]').forEach(r=>{if(!seen.has(r.dataset.proc))r.remove()})}
+  box.querySelectorAll('[data-proc]').forEach(r=>{if(!seen.has(r.dataset.proc))r.remove()});
+  let more=box.querySelector('.proc-more');if(PROC.size>MAX+1){if(!more){more=mkBtn({cls:'proc-more',label:''});box.appendChild(more)}more.textContent=PROC_OPEN?'свернуть':'ещё '+(PROC.size-MAX);more.dataset.tip=PROC_OPEN?'Свернуть процессы':'Показать все процессы';more.setAttribute('aria-expanded',String(PROC_OPEN));more.onclick=()=>{PROC_OPEN=!PROC_OPEN;paintProcs()}}else if(more)more.remove()}
 // the brand reel: same flywheel as the scene (energy τ 1.2 s, kick in ≈ 0.2 s, coast τ 1.4 s); still when nothing happens
 const Reel={el:$('#reel'),a:0,e:0,eT:0,v:0,k:0,raf:0,last:0,
   energy(x){this.eT=x;this.go()},kick(x){if(REDUCED)return;this.k=Math.min(2.5,this.k+x);this.go()},
@@ -5610,10 +5761,28 @@ function bootScene(){const a=createCosmos($('#cosmos'),{reduced:REDUCED,plateUrl
   new ResizeObserver(()=>{a.resize();sceneWrite()}).observe(SC.wrap);
   addEventListener('scroll',()=>{if(!SC.rs)SC.rs=requestAnimationFrame(()=>{SC.rs=0;sceneWrite()})},{passive:true});
   addEventListener('resize',()=>{sceneTo(false);sceneWrite();inkNav(true)});
+  // the light follows the mouse on the live scene (home and the open card) — the same wiring the kit's site boot gives a home page;
+  // data screens keep the star still (sceneTo sets the pointer to the centre). The canvas itself takes no pointer events.
+  let pt=null,ptRaf=0;addEventListener('pointermove',e=>{if(e.pointerType&&e.pointerType!=='mouse')return;pt=e;
+    if(ptRaf)return;ptRaf=requestAnimationFrame(()=>{ptRaf=0;if(still()||!a.ok||REDUCED)return;a.setPointer((pt.clientX/innerWidth-.5)*2,(pt.clientY/innerHeight-.5)*-2)})},{passive:true});
   sceneWrite();smoke()}
+/* ---------------- loading: the interface appears only when nothing will stutter ----------------
+   ready = (1) the scene plate is decoded (the same URL the kit loads — one request, the kit's texture upload follows at once),
+   (2) the shaders have drawn three frames behind the loading screen (compile + first draw are the longest tasks),
+   (3) the first data (profiles, meta) has arrived and the first screen is painted, (4) fonts are in. Then the loading screen fades
+   over --t-slow and the scene keeps running — no first-frame jolt is visible. A 8 s guard never leaves the user on a black screen.
+   What the kit could offer instead of step 1–2: a «scene:ready» event (plate uploaded + N frames drawn) on createCosmos' api. */
+const BOOT={t0:performance.now(),marks:{}};window.ABOOK_BOOT=BOOT;window.abookDev={procSet,procEnd};   // marks and process hooks for the headless checks (ai-dev)
+const bootMark=k=>{BOOT.marks[k]=Math.round(performance.now()-BOOT.t0)};
+const plateReady=(()=>{const im=new Image();im.decoding='async';im.src='/kit/scene/plate-hd.webp';return (im.decode?im.decode():new Promise(r=>{im.onload=r;im.onerror=r})).catch(()=>{}).then(()=>bootMark('plate'))})();
+const framesDrawn=n=>new Promise(r=>{const step=()=>n-->0?requestAnimationFrame(step):r();requestAnimationFrame(step)});
 sceneTo(true);bootScene();
-attachButtons(document,{press:'.btn, .chip-btn, .icon-btn, .ghost, .chip, .ib, .rnav button, .seg button, .dial button, .qdot, .bigbtn, .profbtn, .pmi, .pma, .hrow, .switch',
-  small:'.icon-btn, .ib, .dial button, .qdot',soft:'.field-body',lift:'.no-lift'});   // no hover lift: nothing pops (ambient tempo)
+const sceneReady=plateReady.then(()=>framesDrawn(3)).then(()=>bootMark('frames'));
+async function bootDone(dataReady){const b=$('#boot');if(!b)return;
+  await Promise.race([Promise.all([sceneReady,dataReady,document.fonts?document.fonts.ready:null]),new Promise(r=>setTimeout(r,8000))]);
+  await framesDrawn(1);bootMark('ready');b.classList.add('off');b.setAttribute('aria-hidden','true');setTimeout(()=>b.remove(),800)}
+attachButtons(document,{press:'.btn, .chip-btn, .icon-btn, .ghost, .chip, .react, .text-btn, .rnav button, .seg button, .dial button, .scale button, .qdot, .bigbtn, .profbtn, .pmi, .pma, .hrow, .switch',
+  small:'.icon-btn, .react, .ghost.ico, .dial button, .scale button, .qdot',soft:'.field-body',lift:'.no-lift'});   // no hover lift: nothing pops (ambient tempo)
 attachPointerGlow(document);attachSwitches(document);
 
 /* ---------------- shell ---------------- */
@@ -5678,14 +5847,8 @@ function tgStateById(id,notDl){
 function tgState(it){return tgStateById(it&&(it.id||it.item_id),!it||!it.has_file)}
 function tgProg(q){const v=q&&q.volume;if(!v||v.stage==='prep')return '';return (v.of>1?`${v.index}/${v.of} `:'')+Math.round(v.pct||0)+'%'}
 function tgStage(q){if(!q)return '';if(q.state==='checking')return 'проверка…';const v=q.volume;return (v&&v.stage==='encode'?'сжатие ':'отправка ')+(tgProg(q)||'…')}
-function tgLabel(st){switch(st.state){
-  case 'not_downloaded':case 'not_configured':case 'unavailable':return '✈';
-  case 'queued':return `✈ TG-очередь · №${st.q.position||'?'}`;
-  case 'checking':case 'sending':return '✈ '+tgStage(st.q);
-  case 'problem':return '⚠ проверка: проблема';
-  case 'error':return '✈ ошибка';
-  case 'sent':return st.of>1?`✓ в Telegram · ${tgVols(st.of)}`:'✓ в Telegram';
-  case 'partial':return `✈ ${st.volumes||0}/${st.of||'?'}`;default:return '✈ в Telegram'}}
+// the button reads «в Telegram» in every state; the state lives in the icon (plane · spinner · ✓ · warning) and in the title
+function tgIcon(st){switch(st.state){case 'sent':return 'check';case 'problem':case 'error':return 'warn';case 'partial':return 'layers';default:return 'external'}}
 function tgTitle(st){const q=st.q||{};switch(st.state){
   case 'not_downloaded':return 'Файл ещё не скачан';case 'not_configured':return 'Telegram не настроен — в терминале: abook-tg setup';
   case 'unavailable':return 'Модуль Telegram недоступен';
@@ -5718,12 +5881,14 @@ async function tgAct(id,title,st){
   catch(er){toast(er.message,'err')}}
 async function tgRemove(id){try{const j=await post('/api/tg/remove',{item_id:id});if(j.error){toast(j.error,'err');return}
   toast(j.cancelled?'Отменено':'Убрано из TG-очереди');pollTgNow(true)}catch(e){toast(e.message,'err')}}
-function tgBtn(it,small){if(it&&!it.has_file&&it.id&&!it.custom&&it.in_library!==0&&typeof ndBtns==='function')return ndBtns(it,small);const b=el('button','ghost tgb'+(small?' sm':''));const id=it&&(it.id||it.item_id)||'';
-  b.dataset.tgId=id;if(!it||!it.has_file)b.dataset.tgNd='1';applyTg(b,it);
-  b.onclick=e=>{e.stopPropagation();e.preventDefault();tgAct(id,it&&it.title,tgState(it))};
-  b.onmousedown=e=>e.stopPropagation();return b}
-function applyTgSt(b,st){b.textContent=tgLabel(st);b.title=tgTitle(st);b.classList.toggle('on',st.state==='sent');
-  b.classList.toggle('warn',st.state==='problem'||st.state==='error');b.disabled=(st.state==='not_downloaded');b.dataset.tgSt=st.state}
+// a book on disk: «в Telegram» is the one action of every row (the row itself opens the card); not on disk → ndBtns (the same button
+// that downloads first), so the row looks the same whatever the file state
+function tgBtn(it,small){if(it&&!it.has_file&&(it.id||it.item_id)&&!it.custom&&it.in_library!==0&&typeof ndBtns==='function')return ndBtns(it.id?it:{...it,id:it.item_id},small);
+  const id=it&&(it.id||it.item_id)||'';const b=mkBtn({icon:'external',label:'в Telegram',small,cls:'ghost tgb'+(small?' sm':''),onClick:()=>tgAct(id,it&&it.title,tgState(it))});
+  b.dataset.tgId=id;b.dataset.busyLock='0';if(!it||!it.has_file)b.dataset.tgNd='1';applyTg(b,it);return b}
+function applyTgSt(b,st){const s=st.state;b.title=tgTitle(st);b.dataset.tgSt=s;setIcon(b,tgIcon(st));
+  b.classList.toggle('done',s==='sent');setBusy(b,s==='queued'||s==='checking'||s==='sending');   // busy stays clickable: the click cancels (title says so)
+  b.disabled=s==='not_downloaded'||s==='not_configured'||s==='unavailable'}
 function applyTg(b,it){if(it&&it.has_file)delete b.dataset.tgNd;applyTgSt(b,tgState(it))}
 async function pollTgNow(fast){let busy=false;try{const j=await api('/api/tg/status');const qm={};(j.queue||[]).forEach(q=>{qm[q.item_id]=q});
     TG_STATE={available:j.available,configured:j.configured,target:j.target,job:j.job||{running:false},sent_items:j.sent_items||{},
@@ -5735,18 +5900,18 @@ async function pollTgNow(fast){let busy=false;try{const j=await api('/api/tg/sta
     else if(q.state==='error')toast(n+': '+(q.message||'ошибка'),'err');else if(q.state==='dry_run')toast(n+': dry-run, в канал не ушло','warn')});
   TG_PREV=now;
   const cur=TG_STATE.queue.find(q=>q.state==='checking'||q.state==='sending');
-  if(cur){const v=cur.volume;procSet('tg',{label:'Telegram · '+tgStage(cur)+(cur.title?' · '+cur.title:''),
-    pct:cur.state==='sending'&&v&&v.stage!=='prep'&&v.pct!=null?v.pct/100:null,accent:'white'})}else procEnd('tg',true);
+  if(cur){const v=cur.volume,wait=TG_STATE.queue.filter(q=>q.state==='queued').length;procSet('tg',{label:'Telegram · '+tgStage(cur)+(cur.title?' · '+cur.title:'')+(wait?' · ещё '+wait+' в очереди':''),
+    pct:cur.state==='sending'&&v&&v.stage!=='prep'&&v.pct!=null?v.pct/100:null,accent:'white',cancel:()=>tgAct(cur.item_id,cur.title,tgStateById(cur.item_id))})}else procEnd('tg',true);
   if(VIEW==='export')paintTgInfo();
   busy=!!cur||TG_STATE.queue.some(q=>q.state==='queued')}
   catch(e){}
   clearTimeout(TG_TIMER);TG_TIMER=setTimeout(()=>pollTgNow(busy),busy||fast?1500:6000)}
 pollTgNow();
-async function aiDownload(mode){mode=mode||aiMode();const b=$('#aiDl');b.disabled=true;
+async function aiDownload(mode){mode=mode||aiMode();const b=$('#aiDl');setBusy(b,true);
   try{const r=await fetch('/api/aidoc?mode='+mode+'&profile='+PROFILE);if(!r.ok)throw new Error('HTTP '+r.status);const blob=await r.blob();
     const cd=r.headers.get('Content-Disposition')||'';const m=/filename\*=UTF-8''([^;]+)/i.exec(cd);const name=m?decodeURIComponent(m[1]):'БИБЛИОТЕКА_ДЛЯ_ИИ.md';
     const a=el('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove()},1500);
-    toast(`Скачано: ${name} · ${Math.round(blob.size/1024)} КБ`);await refreshMeta()}catch(e){toast('Не удалось: '+e.message,'err')}finally{b.disabled=false}}
+    toast(`Скачано: ${name} · ${Math.round(blob.size/1024)} КБ`);await refreshMeta()}catch(e){toast('Не удалось: '+e.message,'err')}finally{setBusy(b,false)}}
 async function aiCopy(mode){mode=mode||aiMode();try{const r=await fetch('/api/aidoc?mode='+mode+'&inline=1&profile='+PROFILE);const text=await r.text();
     let ok=false;try{await navigator.clipboard.writeText(text);ok=true}catch(e){}
     if(!ok){const ta=el('textarea');ta.value=text;ta.style.cssText='position:fixed;left:-9999px;top:0';document.body.appendChild(ta);ta.select();try{ok=document.execCommand('copy')}catch(e){}ta.remove()}
@@ -5816,12 +5981,14 @@ function renderCard(){const {item:it,review:r}=CUR;F=blankF(r);const was=$('#car
   const m=$('#cM');m.innerHTML='';const add=(t)=>{m.appendChild(el('span',null,t))};
   if(it.custom){add(it.source==='read'?'вне библиотеки':'вне библиотеки');if(it.year)add(it.year);if(it.format)add(it.format)}
   else{if(it.narrator)add((/^чита/i.test(it.narrator)?'':'Читает ')+it.narrator+(it.ai_voice?' (ИИ-озвучка)':''));if(it.hours!=null)add(fmtH(it.hours,it.hours_exact));if(it.lang)add(it.lang);
-    const b=DL[it.status]||DL.pending;const bs=el('span','badge '+b[1],b[0]);m.appendChild(bs);
-    const o=el('button','linkbtn','открыть файл');o.disabled=!it.has_file;o.onclick=()=>openFile('file');m.appendChild(o);
-    const f=el('button','linkbtn','в папке');f.disabled=!it.has_file;f.onclick=()=>openFile('folder');m.appendChild(f)}
-  if(it.id!=='custom:new'){const q=el('button','linkbtn',it.in_queue?'✓ в очереди':'+ в очередь');q.onclick=toggleQueue;m.appendChild(q)}
-  if(!it.custom)m.appendChild(tgBtn(it,true));
-  if(!it.custom&&it.has_file&&typeof reportBtn==='function')m.appendChild(reportBtn({item_id:it.id,author:it.author,title:it.title},'⚑ Плохая запись'));
+    const b=DL[it.status]||DL.pending;const bs=el('span','badge '+b[1],b[0]);m.appendChild(bs)}
+  // the book's actions: one row of equal plates — send, listen, queue; the rare ones (folder, report) behind «⋯»
+  const acts=$('#cActs');acts.innerHTML='';acts.hidden=it.id==='custom:new';
+  if(!it.custom)acts.appendChild(tgBtn(it,true));
+  if(!it.custom&&it.has_file)acts.appendChild(mkBtn({icon:'play',label:'Слушать',small:true,title:'Открыть файл в плеере Windows',onClick:()=>openFile('file')}));
+  if(it.id!=='custom:new')acts.appendChild(mkBtn({icon:'layers',label:it.in_queue?'В очереди':'В очередь',small:true,check:true,pressed:!!it.in_queue,title:it.in_queue?'Убрать из очереди':'Поставить в очередь прослушивания',onClick:toggleQueue}));
+  if(!it.custom)acts.appendChild(moreBtn(()=>[...(it.has_file?[{icon:'folder-open',label:'Показать в папке',onClick:()=>openFile('folder')}]:typeof ndMenu==='function'?ndMenu(it):[]),'-',
+    typeof reportDlg==='function'?{icon:'flag',label:it.has_file?'Плохая запись…':'Что-то не так с записью…',title:'Пожаловаться: неполная, не та книга, плохое качество',onClick:()=>reportDlg({item_id:it.id,author:it.author,title:it.title})}:null],true));
   $('#cAbout').textContent=it.about||'';$('#cAbout').hidden=!it.about;$('#cWhy').textContent=it.why?'Почему подобрано: '+it.why:'';$('#cWhy').hidden=!it.why;
   $('#customBox').hidden=!it.editable;if(it.editable){$('#fAu').value=it.author||'';$('#fTi').value=it.title||'';$('#fYear').value=it.year||'';$('#fSec').value=it.section||'Вне библиотеки';$('#fFmt').value=it.format||'книга';$('#fNote').value=it.note||'';$('#simBox').hidden=true}
   $('#fStart').value=r?r.started:'';$('#fFin').value=r?r.finished:'';$('#fStop').value=r?r.stopped_at:'';$('#fText').value=r?r.text:'';
@@ -5842,7 +6009,7 @@ function renderDial(){const d=$('#dial');d.innerHTML='';for(let i=0;i<=10;i++){c
   if(SC.score!==F.overall){SC.score=F.overall;smoke()}}
 function renderSubs(){const box=$('#subs');box.innerHTML='';for(const [k,lab] of META.subscores){const d=el('div','sb');const top=el('div','top');
     const name=lab[0].toUpperCase()+lab.slice(1);top.appendChild(el('span',null,name));const r=el('span');const val=el('span','v');r.appendChild(val);
-    const x=el('button','x','×');x.title='сбросить';r.appendChild(x);top.appendChild(r);d.appendChild(top);
+    const x=mkBtn({icon:'x',cls:'x',aria:'Сбросить подоценку'});r.appendChild(x);top.appendChild(r);d.appendChild(top);
     const bar=el('div','bar');bar.tabIndex=0;bar.setAttribute('role','slider');bar.setAttribute('aria-label',name);bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','10');
     bar.title='клик или протянуть — 1–10 (к левому краю — 0); ←/→ с клавиатуры';const fill=el('b');bar.appendChild(fill);
     // v shown: the committed score, or a hover preview (dimmer strip + gold number); nothing is rebuilt, so hover/drag survive a commit
@@ -5873,14 +6040,14 @@ function renderChips(){const box=$('#chips');box.innerHTML='';const has=t=>F.tag
 function renderStatus(){const s=$('#status');s.querySelectorAll('button').forEach(b=>b.remove());for(const k of ['want','in_progress','listened','dropped']){const b=el('button',F.status===k?'on':'',ST[k]);b.setAttribute('role','radio');
     b.onclick=()=>{F.status=k;const t=today();if(k==='in_progress'&&!$('#fStart').value)$('#fStart').value=t;if((k==='listened'||k==='dropped')&&!$('#fFin').value)$('#fFin').value=t;renderStatus();renderDial()};s.appendChild(b)}
   s.setAttribute('role','radiogroup');inkSeg(s);$('#fStop').hidden=!(F.status==='in_progress'||F.status==='dropped')}
-function renderToggles(){const b=$('#bRelisten');b.textContent=F.relisten?'✓ Перечитать':'Перечитать';b.classList.toggle('on',F.relisten);b.setAttribute('aria-pressed',String(F.relisten))}
+function renderToggles(){setPressed($('#bRelisten'),F.relisten)}
 // quotes: «+ Цитата» adds a row and focuses it; × or Backspace in an empty row removes it; each field grows with its text
-function renderQuotes(focus){const box=$('#fQuotes');box.innerHTML='';box.hidden=!F.quotes.length;$('#bQuote').textContent=F.quotes.length?'+ Ещё цитата':'+ Цитата';
+function renderQuotes(focus){const box=$('#fQuotes');box.innerHTML='';box.hidden=!F.quotes.length;$('#bQuoteL').textContent=F.quotes.length?'Ещё цитата':'Цитата';
   if(!F.quotes.length)return;box.appendChild(el('div','lbl',F.quotes.length>1?'Цитаты · '+F.quotes.length:'Цитата'));
   F.quotes.forEach((q,i)=>{const r=el('div','qrow');r.appendChild(el('span','qm','«'));const t=el('textarea','in');t.rows=1;t.value=q;t.maxLength=2000;
     t.placeholder=i?'Ещё одна цитата':'Цитата или момент, который запомнился';const grow=()=>{t.style.height='auto';t.style.height=t.scrollHeight+'px'};
     t.oninput=()=>{F.quotes[i]=t.value;grow()};t.onkeydown=e=>{if(e.key==='Backspace'&&!t.value){e.preventDefault();F.quotes.splice(i,1);renderQuotes(i-1)}};
-    const x=el('button','x','×');x.type='button';x.title='Убрать цитату';x.setAttribute('aria-label','Убрать цитату');x.onclick=()=>{F.quotes.splice(i,1);renderQuotes()};
+    const x=mkBtn({icon:'x',cls:'x',aria:'Убрать цитату',onClick:()=>{F.quotes.splice(i,1);renderQuotes()}});
     r.appendChild(t);r.appendChild(x);box.appendChild(r);requestAnimationFrame(grow);if(i===focus)setTimeout(()=>t.focus(),30)})}
 $('#bQuote').onclick=()=>{F.quotes.push('');renderQuotes(F.quotes.length-1)};
 $('#bRelisten').onclick=()=>{F.relisten=!F.relisten;renderToggles()};
@@ -5896,9 +6063,9 @@ async function save(){if(!CUR)return;const it=CUR.item;if(F.overall==null&&F.sta
   const body={item_id:it.id,overall:F.overall,scores:F.scores,tags:F.tags,status:F.status,stopped_at:$('#fStop').value,started:$('#fStart').value,finished:$('#fFin').value,
     quote:joinQuotes(F.quotes),relisten:F.relisten,text:$('#fText').value};
   if(it.editable){Object.assign(body,{author:$('#fAu').value,title:$('#fTi').value,year:$('#fYear').value,section:$('#fSec').value,format:$('#fFmt').value,note:$('#fNote').value});if(!body.title.trim()){toast('Укажите название','err');$('#fTi').focus();return}}
-  $('#save').disabled=true;try{const j=await post('/api/review',body);const id=j.item_id;const fresh=await api('/api/item?id='+encodeURIComponent(id));CUR=fresh;SHOWHIST=false;renderCard();history.replaceState(null,'','#item='+encodeURIComponent(id));
+  setBusy($('#save'),true);try{const j=await post('/api/review',body);const id=j.item_id;const fresh=await api('/api/item?id='+encodeURIComponent(id));CUR=fresh;SHOWHIST=false;renderCard();history.replaceState(null,'','#item='+encodeURIComponent(id));
     kick(body.overall==null?.8:.8+body.overall*.12);done(j,'Сохранено')}   // the review goes into the disc: a swell, longer for a higher score
-  catch(e){toast('Ошибка: '+e.message,'err')}finally{$('#save').disabled=false}}
+  catch(e){toast('Ошибка: '+e.message,'err')}finally{setBusy($('#save'),false)}}
 $('#save').onclick=save;
 // in-app confirm on the kit modal (window.confirm looks foreign and blocks the page); resolves true/false
 let CFM=null;
@@ -5915,69 +6082,75 @@ $('#bDel').onclick=async()=>{if(!CUR)return;const it=CUR.item;
 async function restore(hid){try{const j=await post('/api/review/restore',{item_id:CUR.item.id,history_id:hid});CUR=await api('/api/item?id='+encodeURIComponent(CUR.item.id));renderCard();kick(.5);done(j,'Версия восстановлена')}catch(e){toast(e.message,'err')}}
 async function loadQuick(){try{const [rv,q]=await Promise.all([api('/api/reviews'),api('/api/queue')]);const box=$('#rateQuick');box.innerHTML='';
   // nudges under the search, only what exists: the queue first (the next thing to listen to), then recent reviews — 4 each
-  const mk=(title,items,fmt)=>{if(!items.length)return;const p=el('div','panel');p.appendChild(el('h3',null,title));const l=el('div','list');items.forEach(x=>l.appendChild(fmt(x)));p.appendChild(l);box.appendChild(p)};
+  const mk=(title,items,fmt)=>{if(!items.length)return;const p=el('div','panel');p.dataset.glow='';p.appendChild(el('h3',null,title));const l=el('div','list');items.forEach(x=>{const r=fmt(x);r.dataset.glow='';l.appendChild(r)});p.appendChild(l);box.appendChild(p)};
   mk('Начало очереди',q.queue.slice(0,4),it=>row(it,null,itemSmall(it),()=>openItem(it.id)));
   mk('Недавние отзывы',rv.reviews.slice(0,4),r=>row(r,r.overall,STL[r.status]+' · '+fmtD(r.updated),()=>openItem(r.item_id)))}catch(e){}}
 function scoreEl(score,label){const s=el('div','score'+(score==null&&label==null?' none':''));s.appendChild(document.createTextNode(label!=null?label:score==null?'·':String(score)));
   if(score!=null){const i=el('i');i.style.setProperty('--p',score/10);s.appendChild(i)}return s}
 function row(x,score,meta,on){const d=el('div','ri');d.appendChild(scoreEl(score));
   const b=el('div','body');b.appendChild(el('div','tt',(x.author?x.author+' — ':'')+x.title));b.appendChild(el('div','mm',meta));d.appendChild(b);
-  if(x.id||x.item_id)d.appendChild(tgBtn(x,true));d.onclick=on;return d}
+  if(x.id||x.item_id)d.appendChild(actsEl(tgBtn(x,true),moreBtn(()=>bookMenu(x),true)));d.onclick=on;return d}
+// the «⋯» of any library book: on disk — listen, folder; not yet — download, source link (ndMenu); then queue, card, report.
+// Built on open, so the queue state is current
+function bookMenu(x,extra){const id=x.id||x.item_id,file=!!x.has_file,open=()=>post('/api/open',{item_id:id,what:'file'}).then(()=>toast('Открываю в плеере…')).catch(e=>toast(e.message,'err'));
+  return [...(file?[{icon:'play',label:'Слушать файл',onClick:open},{icon:'folder-open',label:'Показать в папке',onClick:()=>post('/api/open',{item_id:id,what:'folder'}).then(()=>toast('Открываю папку…')).catch(e=>toast(e.message,'err'))}]:typeof ndMenu==='function'&&!x.custom?ndMenu(x):[]),
+    x.id&&x.in_queue!==undefined?{icon:'layers',label:x.in_queue?'Убрать из очереди':'В очередь',checked:!!x.in_queue,onClick:async()=>{try{const j=await post('/api/queue',{op:x.in_queue?'remove':'add',item_id:id});x.in_queue=!x.in_queue;if(x.in_queue)kick(.35);applyOut(j.out);refreshMeta();toast(x.in_queue?'Добавлено в очередь':'Убрано из очереди')}catch(e){toast(e.message,'err')}}}:null,
+    {icon:'file',label:'Открыть карточку',onClick:()=>openItem(id)},...(extra||[]),
+    !x.custom&&typeof reportDlg==='function'?'-':null,!x.custom&&typeof reportDlg==='function'?{icon:'flag',label:file?'Плохая запись…':'Что-то не так с записью…',onClick:()=>reportDlg({item_id:id,author:x.author,title:x.title})}:null]}
 
 /* ---------------- my reviews ---------------- */
 let RV=[];
 function opts(sel,vals,keepFirst=true){const s=$(sel),k=s.value;s.length=keepFirst?1:0;vals.forEach(v=>s.add(Array.isArray(v)?new Option(v[1],v[0]):new Option(v,v)));s.value=k}
-async function loadReviews(){try{RV=(await api('/api/reviews')).reviews;const u=f=>[...new Set(RV.map(f).flat().filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ru'));
+async function loadReviews(){try{await cached('reviews',()=>api('/api/reviews'),j=>{RV=j.reviews;const u=f=>[...new Set(RV.map(f).flat().filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ru'));
   opts('#rvStatus',Object.entries(STL));opts('#rvSection',u(r=>r.section));opts('#rvAuthor',u(r=>r.author));opts('#rvNarr',u(r=>r.narrator));opts('#rvTag',u(r=>r.tags));
-  if(!$('#rvMin').length){for(let i=0;i<=10;i++){$('#rvMin').add(new Option('от '+i,i));$('#rvMax').add(new Option('до '+i,i))}$('#rvMax').value=10}renderReviews()}catch(e){toast(e.message,'err')}}
+  if(!$('#rvMin').length){for(let i=0;i<=10;i++){$('#rvMin').add(new Option('от '+i,i));$('#rvMax').add(new Option('до '+i,i))}$('#rvMax').value=10}renderReviews()})}catch(e){toast(e.message,'err')}}
 function renderReviews(){const q=norm($('#rvQ').value.trim()),g=id=>$(id).value,mn=+g('#rvMin'),mx=+g('#rvMax');
   let L=RV.filter(r=>(!g('#rvStatus')||r.status===g('#rvStatus'))&&(!g('#rvSection')||r.section===g('#rvSection'))&&(!g('#rvAuthor')||r.author===g('#rvAuthor'))&&(!g('#rvNarr')||r.narrator===g('#rvNarr'))
     &&(!g('#rvTag')||r.tags.includes(g('#rvTag')))&&(!g('#rvLen')||r.bucket===g('#rvLen'))&&((mn===0&&mx===10)||(r.overall!=null&&r.overall>=mn&&r.overall<=mx))
     &&(!q||norm([r.author,r.title,r.text,r.quote,r.stopped_at,r.tags.join(' ')].join(' ')).includes(q)));
   const so=g('#rvSort');L.sort({date:(a,b)=>(b.updated||'').localeCompare(a.updated||''),rating:(a,b)=>(b.overall??-1)-(a.overall??-1),'rating-asc':(a,b)=>(a.overall??99)-(b.overall??99),hours:(a,b)=>(b.hours||0)-(a.hours||0),title:(a,b)=>a.title.localeCompare(b.title,'ru')}[so]);
-  $('#rvCount').textContent=`${L.length} из ${RV.length}`;const box=$('#rvList');box.innerHTML='';
-  if(!RV.length){const h=el('div','hint');h.appendChild(el('div',null,'Отзывов пока нет. Найдите книгу и поставьте оценку.'));const b=el('button','ghost','Найти книгу');b.onclick=openPal;h.appendChild(b);box.appendChild(h);return}
-  if(!L.length){const h=el('div','hint');h.appendChild(el('div',null,'Под эти фильтры ничего не подходит.'));const r=el('div','row row-center');const b=el('button','ghost','Снять фильтры');
-    b.onclick=()=>{$('#rvQ').value='';$$('#v-reviews .filters select').forEach(x=>{x.selectedIndex=x.id==='rvMax'?x.options.length-1:0});renderReviews()};r.appendChild(b);h.appendChild(r);box.appendChild(h);return}
-  for(const r of L){const d=row(r,r.overall,[STL[r.status]+(r.stopped_at?' ('+r.stopped_at+')':''),fmtDT(r.updated),r.section,r.bucket?LENL[r.bucket]:'',r.hours?fmtH(r.hours,true):''].filter(Boolean).join(' · '),()=>openItem(r.item_id));
-    const b=d.querySelector('.body');if(r.text)b.appendChild(el('div','sn',r.text));const mi=el('div','minis');r.tags.forEach(t=>mi.appendChild(el('span',null,t)));
-    for(const [k,lab] of META.subscores)if(r.scores[k]!=null)mi.appendChild(el('span',null,lab.split('/')[0]+' '+r.scores[k]));if(r.relisten)mi.appendChild(el('span',null,'перечитать'));if(mi.children.length)b.appendChild(mi);box.appendChild(d)}}
+  $('#rvCount').textContent=`${L.length.toLocaleString('ru-RU')} из ${RV.length.toLocaleString('ru-RU')}`;const box=$('#rvList');
+  if(!RV.length){box.innerHTML='';const h=el('div','hint');h.appendChild(el('div',null,'Отзывов пока нет. Найдите книгу и поставьте оценку.'));h.appendChild(mkBtn({icon:'search',label:'Найти книгу',cls:'btn',onClick:openPal}));box.appendChild(h);return}
+  if(!L.length){box.innerHTML='';const h=el('div','hint');h.appendChild(el('div',null,'Под эти фильтры ничего не подходит.'));const r=el('div','row row-center');
+    r.appendChild(mkBtn({icon:'x',label:'Снять фильтры',cls:'btn',onClick:()=>{$('#rvQ').value='';$$('#v-reviews .filters select').forEach(x=>{x.selectedIndex=x.id==='rvMax'?x.options.length-1:0});renderReviews()}}));h.appendChild(r);box.appendChild(h);return}
+  // a window of 100 rows at a time; the same filters after a background refresh keep the window the user has opened
+  pager(box,L,r=>{const d=row(r,r.overall,[STL[r.status]+(r.stopped_at?' ('+r.stopped_at+')':''),fmtDT(r.updated),r.section,r.bucket?LENL[r.bucket]:'',r.hours?fmtH(r.hours,true):''].filter(Boolean).join(' · '),()=>openItem(r.item_id));
+    const b=d.querySelector('.body');b.querySelector('.tt').title=(r.author?r.author+' — ':'')+r.title;if(r.text)b.appendChild(el('div','sn',r.text));const mi=el('div','minis');r.tags.forEach(t=>mi.appendChild(el('span',null,t)));
+    for(const [k,lab] of META.subscores)if(r.scores[k]!=null)mi.appendChild(el('span',null,lab.split('/')[0]+' '+r.scores[k]));if(r.relisten)mi.appendChild(el('span',null,'перечитать'));if(mi.children.length)b.appendChild(mi);return d},
+    {key:[q,so,mn,mx,g('#rvStatus'),g('#rvSection'),g('#rvAuthor'),g('#rvNarr'),g('#rvTag'),g('#rvLen')].join('|')})}
 ['#rvQ','#rvStatus','#rvSection','#rvAuthor','#rvNarr','#rvTag','#rvMin','#rvMax','#rvLen','#rvSort'].forEach(s=>$(s).addEventListener('input',renderReviews));
 
 /* ---------------- queue ---------------- */
 let Q=[],dragI=null;
-async function loadQueue(){try{Q=(await api('/api/queue')).queue;renderQueue()}catch(e){toast(e.message,'err')}}
+async function loadQueue(){try{await cached('queue',()=>api('/api/queue'),j=>{Q=j.queue;renderQueue()})}catch(e){toast(e.message,'err')}}
 async function saveOrder(){try{const j=await post('/api/queue',{op:'order',order:Q.map(x=>x.id)});applyOut(j.out)}catch(e){toast(e.message,'err');loadQueue()}}
 function renderQueue(){const h=Q.reduce((s,x)=>s+(x.hours||0),0);$('#qSum').textContent=Q.length?`${Q.length} книг · ≈${Math.round(h)} ч · перетаскивайте за ⠿ или двигайте стрелками`:'«Хочу послушать» в отзыве или «+ в очередь» на карточке добавляют сюда.';
-  const box=$('#qList');box.innerHTML='';
-  if(!Q.length){const h=el('div','hint');h.appendChild(el('div',null,'Очередь пуста. Подбор по вашим оценкам — в «Что дальше»; любую книгу можно найти и поставить в очередь.'));const r=el('div','row row-center');const b1=el('button','ghost','Что дальше');b1.onclick=()=>show('next');const b2=el('button','ghost','Найти книгу');b2.onclick=openPal;r.appendChild(b1);r.appendChild(b2);h.appendChild(r);box.appendChild(h);return}
-  Q.forEach((it,i)=>{const d=el('div','qi');d.draggable=true;d.appendChild(el('span','hd','⠿'));d.appendChild(el('span','n',String(i+1)));
-    const b=el('div','body');b.appendChild(el('div','tt',(it.author?it.author+' — ':'')+it.title));b.appendChild(el('div','mm',itemSmall(it)));b.onclick=()=>openItem(it.id);d.appendChild(b);
-    const bd=DL[it.status]||DL.pending;if(it.status!=='done')d.appendChild(el('span','badge '+bd[1],bd[0]));d.appendChild(tgBtn(it,true));   // on the queue screen «в очереди» says nothing — only what is not on disk yet
-    const mk=(t,tt,f)=>{const x=el('button','ib',t);x.title=tt;x.onclick=f;d.appendChild(x)};
-    mk('↑','выше',()=>{if(i>0){[Q[i-1],Q[i]]=[Q[i],Q[i-1]];renderQueue();saveOrder()}});mk('↓','ниже',()=>{if(i<Q.length-1){[Q[i+1],Q[i]]=[Q[i],Q[i+1]];renderQueue();saveOrder()}});
-    mk('×','убрать',async()=>{try{const j=await post('/api/queue',{op:'remove',item_id:it.id});Q.splice(i,1);renderQueue();applyOut(j.out);refreshMeta()}catch(e){toast(e.message,'err')}});
+  const box=$('#qList');
+  if(!Q.length){box.innerHTML='';const h=el('div','hint');h.appendChild(el('div',null,'Очередь пуста. Подбор по вашим оценкам — в «Что дальше»; любую книгу можно найти и поставить в очередь.'));const r=el('div','row row-center');r.appendChild(mkBtn({icon:'play',label:'Что дальше',cls:'btn',onClick:()=>show('next')}));r.appendChild(mkBtn({icon:'search',label:'Найти книгу',cls:'btn',onClick:openPal}));h.appendChild(r);box.appendChild(h);return}
+  pager(box,Q,(it,i)=>{const d=el('div','qi');d.draggable=true;d.appendChild(el('span','hd','⠿'));d.appendChild(el('span','n',String(i+1)));
+    const b=el('div','body');const tt=el('div','tt',(it.author?it.author+' — ':'')+it.title);tt.title=tt.textContent;b.appendChild(tt);b.appendChild(el('div','mm',itemSmall(it)));b.onclick=()=>openItem(it.id);d.appendChild(b);
+    const bd=DL[it.status]||DL.pending;if(it.status!=='done')d.appendChild(el('span','badge '+bd[1],bd[0]));   // on the queue screen «в очереди» says nothing — only what is not on disk yet
+    // one row: the book's action and its «⋯», then the order controls — icon buttons with names in the title (keyboard: Tab, Enter)
+    const mk=(icon,tt,f,cls)=>{const x=mkBtn({icon,cls:'icon-btn row'+(cls?' '+cls:''),aria:tt,onClick:f});x.disabled=tt==='Выше'?i===0:tt==='Ниже'?i===Q.length-1:false;return x};
+    d.appendChild(actsEl(tgBtn(it,true),moreBtn(()=>bookMenu({...it,in_queue:undefined}),true),el('span','gap'),
+      mk('chev-d','Выше',()=>{if(i>0){[Q[i-1],Q[i]]=[Q[i],Q[i-1]];renderQueue();saveOrder()}},'rot'),mk('chev-d','Ниже',()=>{if(i<Q.length-1){[Q[i+1],Q[i]]=[Q[i],Q[i+1]];renderQueue();saveOrder()}}),
+      mk('x','Убрать из очереди',async()=>{try{const j=await post('/api/queue',{op:'remove',item_id:it.id});Q.splice(i,1);renderQueue();applyOut(j.out);refreshMeta();toast('Убрано из очереди')}catch(e){toast(e.message,'err')}})));
     d.addEventListener('dragstart',e=>{dragI=i;d.classList.add('drag');e.dataTransfer.effectAllowed='move'});d.addEventListener('dragend',()=>d.classList.remove('drag'));
     d.addEventListener('dragover',e=>{e.preventDefault();d.classList.add('over')});d.addEventListener('dragleave',()=>d.classList.remove('over'));
-    d.addEventListener('drop',e=>{e.preventDefault();d.classList.remove('over');if(dragI==null||dragI===i)return;const [x]=Q.splice(dragI,1);Q.splice(i,0,x);dragI=null;renderQueue();saveOrder()});box.appendChild(d)})}
+    d.addEventListener('drop',e=>{e.preventDefault();d.classList.remove('over');if(dragI==null||dragI===i)return;const [x]=Q.splice(dragI,1);Q.splice(i,0,x);dragI=null;renderQueue();saveOrder()});return d},{key:'queue'})}
 
 /* ---------------- next ---------------- */
-async function loadNext(){try{const j=await api('/api/recommend');const rc=j.recency;
+async function loadNext(){try{await cached('recommend',()=>api('/api/recommend'),j=>{const rc=j.recency;
   $('#nxNote').textContent=j.seeds?`По вашим оценкам (${j.seeds}) с учётом свежих отзывов: вес отзыва = 0.5^(дней/${rc.half_life_days}), последние ${rc.recent_n} — не ниже ${rc.recent_min}. Формула детерминирована, без ИИ.`
     :'Отзывов с оценками пока нет — показаны стартовые точки составителей каталога. Оцените пару книг, и подбор станет личным.';
-  const box=$('#nxList');box.innerHTML='';if(!j.items.length){box.appendChild(el('div','hint','Нечего рекомендовать — всё оценено?'));return}
-  // UX: at most 7 cards at once; the rest by «Показать ещё» (appended below, nothing above moves)
-  const NMAX=7;let more=null;
-  j.items.forEach((it,i)=>{const d=el('div','ri');d.style.cursor='default';if(i>=NMAX)d.hidden=true;d.appendChild(scoreEl(null,String(i+1)));const b=el('div','body');
-    const t=el('div','tt',(it.author?it.author+' — ':'')+it.title);t.style.cursor='pointer';t.onclick=()=>openItem(it.id);b.appendChild(t);
+  const box=$('#nxList');if(!j.items.length){box.innerHTML='';box.appendChild(el('div','hint','Нечего рекомендовать — всё оценено?'));return}
+  // UX: 7 cards at once; the rest by «Показать ещё» (appended below, nothing above moves)
+  pager(box,j.items,(it,i)=>{const d=el('div','ri');d.style.cursor='default';d.appendChild(scoreEl(null,String(i+1)));const b=el('div','body');
+    const t=el('div','tt',(it.author?it.author+' — ':'')+it.title);t.title=t.textContent;t.style.cursor='pointer';t.onclick=()=>openItem(it.id);b.appendChild(t);
     b.appendChild(el('div','mm',[it.section,it.bucket?LENL[it.bucket]:'',fmtH(it.hours,it.hours_exact),it.narrator,(DL[it.status]||DL.pending)[0],'балл '+it.score.toFixed(2)].filter(Boolean).join(' · ')));
     const w=el('div','why2');it.plus.forEach(x=>w.appendChild(el('div','p','+ '+x)));it.minus.forEach(x=>w.appendChild(el('div','n','− '+x)));b.appendChild(w);
-    if(it.about)b.appendChild(el('div','sn',it.about));const r=el('div','row');r.style.marginTop='10px';
-    const o=el('button','ghost sm','Открыть карточку');o.onclick=()=>openItem(it.id);r.appendChild(o);
-    const q=el('button','ghost sm'+(it.in_queue?' on':''),it.in_queue?'✓ в очереди':'+ в очередь');q.onclick=async()=>{try{const jj=await post('/api/queue',{op:it.in_queue?'remove':'add',item_id:it.id});it.in_queue=!it.in_queue;if(it.in_queue)kick(.35);q.textContent=it.in_queue?'✓ в очереди':'+ в очередь';q.classList.toggle('on',it.in_queue);applyOut(jj.out);refreshMeta()}catch(e){toast(e.message,'err')}};r.appendChild(q);r.appendChild(tgBtn(it,true));
-    b.appendChild(r);d.appendChild(b);box.appendChild(d)});
-  if(j.items.length>NMAX){more=el('button','ghost','Показать ещё '+(j.items.length-NMAX));more.style.alignSelf='center';
-    more.onclick=()=>{box.querySelectorAll('.ri[hidden]').forEach(x=>x.hidden=false);more.remove()};box.appendChild(more)}}catch(e){toast(e.message,'err')}}
+    if(it.about)b.appendChild(el('div','sn',it.about));
+    d.appendChild(b);d.appendChild(actsEl(tgBtn(it,true),moreBtn(()=>bookMenu(it),true)));return d},{page:7,key:'next'})})}catch(e){toast(e.message,'err')}}
 
 /* ---------------- stats (inline SVG, monochrome: the ramp is light, not hue) ---------------- */
 function hbars(rows,{max=10,fmt=v=>v,color=()=>'#d9dbe3',marker=null}={}){if(!rows.length)return '<div class="sub">нет данных</div>';
@@ -6159,22 +6332,21 @@ function tasteDriftHtml(s){const f1=v=>v==null?'—':String(Math.round(v*10)/10)
   return h}
 
 /* ---------------- library ---------------- */
-let LB=[],LBALL=false,LBN=200;
-async function loadLibrary(){try{LBALL=$('#lbAll').checked;LB=(await api('/api/library'+(LBALL?'?all=1':''))).items.filter(i=>i.source!=='read');
-  opts('#lbSec',[...new Set(LB.map(i=>i.section))].sort((a,b)=>a.localeCompare(b,'ru')));LBN=200;renderLibrary()}catch(e){toast(e.message,'err')}}
+let LB=[],LBALL=false;
+async function loadLibrary(){try{LBALL=$('#lbAll').checked;await cached('library.'+(LBALL?1:0),()=>api('/api/library'+(LBALL?'?all=1':'')),j=>{LB=j.items.filter(i=>i.source!=='read');
+  opts('#lbSec',[...new Set(LB.map(i=>i.section))].sort((a,b)=>a.localeCompare(b,'ru')));renderLibrary()})}catch(e){toast(e.message,'err')}}
 function renderLibrary(){const q=norm($('#lbQ').value.trim()),g=id=>$(id).value;
   const L=LB.filter(i=>(!g('#lbSec')||i.section===g('#lbSec'))&&(!g('#lbDl')||(g('#lbDl')==='done'?i.status==='done':i.status!=='done'))&&(!g('#lbAi')||String(+i.ai_voice)===g('#lbAi'))
     &&(!g('#lbLang')||i.lang===g('#lbLang'))&&(!g('#lbLen')||i.bucket===g('#lbLen'))&&(!g('#lbRev')||String(+(i.rstatus!=null))===g('#lbRev'))&&(!q||norm(i.author+' '+i.title+' '+i.narrator).includes(q)));
-  const hrs=L.reduce((s,i)=>s+(i.hours||0),0);$('#lbCount').textContent=`${L.length} позиций · ≈${Math.round(hrs)} ч · скачано ${L.filter(i=>i.status==='done').length}`;
-  const tb=$('#lbBody');tb.innerHTML='';for(const i of L.slice(0,LBN)){const tr=el('tr');const t=el('td','t');t.textContent=(i.author?i.author+' — ':'')+i.title;t.onclick=()=>openItem(i.id);tr.appendChild(t);
+  const hrs=L.reduce((s,i)=>s+(i.hours||0),0);$('#lbCount').textContent=`${L.length.toLocaleString('ru-RU')} позиций · ≈${Math.round(hrs).toLocaleString('ru-RU')} ч · скачано ${L.filter(i=>i.status==='done').length.toLocaleString('ru-RU')}`;
+  // 200 rows a window; the foot with the counter lives under the table (#lbMore), rows are appended, nothing above moves
+  pager($('#lbBody'),L,i=>{const tr=el('tr');const t=el('td','t');t.textContent=(i.author?i.author+' — ':'')+i.title;t.title=t.textContent;t.onclick=()=>openItem(i.id);tr.appendChild(t);
     tr.appendChild(el('td',null,i.section));tr.appendChild(el('td','num',fmtH(i.hours,i.hours_exact)));const n=el('td',null,i.narrator+(i.ai_voice?' · ИИ':''));tr.appendChild(n);tr.appendChild(el('td','mono',i.lang));
     const b=itemBadge(i);const bt=el('td');bt.appendChild(el('span','badge '+b[1],b[0]));tr.appendChild(bt);tr.appendChild(el('td','mono',i.fmt||''));
     const sc=el('td','num',i.overall!=null?String(i.overall):(i.rstatus?STL[i.rstatus]:''));if(i.overall!=null)sc.style.color=rcol(i.overall);tr.appendChild(sc);
-    const ac=el('td');ac.style.whiteSpace='nowrap';if(i.has_file){const o=el('button','ib','▶');o.title='открыть файл';o.onclick=()=>post('/api/open',{item_id:i.id,what:'file'}).then(()=>toast('Открываю…')).catch(e=>toast(e.message,'err'));
-      const f=el('button','ib','⌂');f.title='показать в папке';f.style.marginLeft='4px';f.onclick=()=>post('/api/open',{item_id:i.id,what:'folder'}).then(()=>toast('Открываю папку…')).catch(e=>toast(e.message,'err'));ac.append(o,f)}
-    const tg=tgBtn(i,true);tg.style.marginLeft='4px';ac.appendChild(tg);tr.appendChild(ac);tb.appendChild(tr)}
-  const m=$('#lbMore');m.innerHTML='';if(L.length>LBN){const b=el('button','ghost','Показать ещё '+Math.min(200,L.length-LBN));b.onclick=()=>{LBN+=200;renderLibrary()};m.appendChild(b)}}
-['#lbQ','#lbSec','#lbDl','#lbAi','#lbLang','#lbLen','#lbRev'].forEach(s=>$(s).addEventListener('input',()=>{LBN=200;renderLibrary()}));$('#lbAll').addEventListener('change',loadLibrary);
+    const ac=el('td','tdacts');ac.appendChild(actsEl(tgBtn(i,true),moreBtn(()=>bookMenu(i),true)));tr.appendChild(ac);return tr},
+    {page:200,foot:$('#lbMore'),key:[q,LBALL,g('#lbSec'),g('#lbDl'),g('#lbAi'),g('#lbLang'),g('#lbLen'),g('#lbRev')].join('|')})}
+['#lbQ','#lbSec','#lbDl','#lbAi','#lbLang','#lbLen','#lbRev'].forEach(s=>$(s).addEventListener('input',renderLibrary));$('#lbAll').addEventListener('change',loadLibrary);
 
 /* ---------------- export ---------------- */
 async function loadExport(){try{const b=await api('/api/backups');const a=(META&&META.out.aidoc)||{};
@@ -6186,7 +6358,7 @@ async function loadExport(){try{const b=await api('/api/backups');const a=(META&
   h+=`<span class="k">облако</span><code>${esc(b.cloud?b.cloud.dir:'—')}</code><span class="k">${esc(b.cloud_note)}</span>`;
   if(b.status.d_ok===false)h+=`<span class="k" style="color:var(--err)">D: ошибка</span><code>${esc(b.status.d_error||'')}</code><span class="k">повтор при сохранении</span>`;
   $('#bkBox').innerHTML=h;paintTgInfo()}catch(e){toast(e.message,'err')}}
-$('#exRebuild').onclick=async()=>{procSet('rebuild',{label:'Пересборка из базы',pct:null,accent:'white'});let ok=false;try{const j=await post('/api/rebuild',{});ok=true;done(j,'Пересобрано');loadExport()}catch(e){toast(e.message,'err')}finally{procEnd('rebuild',ok)}};
+$('#exRebuild').onclick=async()=>{const b=$('#exRebuild');setBusy(b,true);procSet('rebuild',{label:'Пересборка из базы',pct:null,accent:'white'});let ok=false;try{const j=await post('/api/rebuild',{});ok=true;done(j,'Пересобрано');loadExport()}catch(e){toast(e.message,'err')}finally{procEnd('rebuild',ok);setBusy(b,false)}};
 const TG_QLABEL={high:'высокое (80 кбит/с, рекоменд.)',speech:'речь (64 кбит/с)',small:'маленький (48 кбит/с)',original:'оригинал (без сжатия)'};
 function paintTgInfo(){const box=$('#tgInfo');if(!box)return;
   if(!TG_STATE.available){box.textContent='Модуль недоступен.';return}
@@ -6203,7 +6375,7 @@ function paintTgInfo(){const box=$('#tgInfo');if(!box)return;
       TG_STATE.quality=sel.value;toast('Сохранено: '+(TG_QLABEL[sel.value]||sel.value))}catch(e){toast(e.message,'err')}};
     wrap.appendChild(sel);box.appendChild(wrap)}
   paintTgQueue()}
-function tgBtnSm(txt,fn,cls){const b=el('button','ghost sm'+(cls?' '+cls:''),txt);b.onclick=fn;return b}
+const tgBtnSm=(txt,fn,icon)=>mkBtn({icon,label:txt,small:true,onClick:fn});
 /* TG-очередь во вкладке «Экспорт»: порядок, текущая книга с прогрессом, пометки (проблема/ошибка), старые многотомные */
 function paintTgQueue(){const box=$('#tgQ');if(!box)return;
   const Q=TG_STATE.queue||[],act=Q.filter(q=>TG_ACTIVE.includes(q.state)),fin=Q.filter(q=>!TG_ACTIVE.includes(q.state)).sort((a,b)=>(b.finished||0)-(a.finished||0));
@@ -6214,10 +6386,10 @@ function paintTgQueue(){const box=$('#tgQ');if(!box)return;
       const st=r.querySelector('.tgq-s');if(st)st.textContent=q.state==='queued'?'в TG-очереди':tgStage(q)+(q.state==='checking'&&q.check_phase?' '+q.check_phase:'');
       const bar=r.querySelector('.tgq-bar i');if(bar)bar.style.width=(q.state==='sending'&&q.volume?Math.round(q.volume.pct||0):0)+'%'});return}
   TG_QSIG=sig;box.textContent='';
-  const h=el('div','tgq-h');h.appendChild(el('b',null,'✈ TG-очередь'));
-  h.appendChild(el('span',null,act.length?`${act.length} ${act.length===1?'книга':act.length<5?'книги':'книг'}`:'пусто — нажмите «✈ в Telegram» у книги'));
+  const h=el('div','tgq-h');h.appendChild(el('b',null,'Очередь отправки'));
+  h.appendChild(el('span',null,act.length?`${act.length} ${act.length===1?'книга':act.length<5?'книги':'книг'}`:'пусто — нажмите «в Telegram» у книги'));
   if(act.length)h.appendChild(tgBtnSm('Остановить всё',async()=>{if(!await confirmDlg('Остановить TG-очередь?','Текущая проверка/отправка будет прервана, очередь очищена. Уже отправленное останется в канале.','Остановить'))return;
-    try{await post('/api/tg/cancel',{});toast('TG-очередь остановлена');pollTgNow(true)}catch(e){toast(e.message,'err')}}));
+    try{await post('/api/tg/cancel',{});toast('TG-очередь остановлена');pollTgNow(true)}catch(e){toast(e.message,'err')}},'x'));
   box.appendChild(h);
   const row=(q,n)=>{const r=el('div','tgq-row tgq-'+q.state);r.dataset.tgq=q.item_id;r.appendChild(el('span','tgq-n',n));
     const t=el('div','tgq-t');t.appendChild(el('span',null,(q.author?q.author+' — ':'')+(q.title||q.item_id)));
@@ -6233,18 +6405,18 @@ function paintTgQueue(){const box=$('#tgQ');if(!box)return;
     else if(c.verdict)note='проверка: '+c.verdict_ru+(c.source==='cache'?' (отчёт '+fmtD(c.checked_at)+')':'');
     if(note)t.appendChild(el('small','tgq-note',note));r.appendChild(t);
     const a=el('div','tgq-a');
-    if(q.state==='queued')a.appendChild(tgBtnSm('убрать',()=>tgRemove(q.item_id)));
-    else if(cur)a.appendChild(tgBtnSm('отмена',()=>tgAct(q.item_id,q.title,tgStateById(q.item_id))));
-    else{if(q.state==='problem')a.appendChild(tgBtnSm('всё равно отправить',()=>tgAct(q.item_id,q.title,tgStateById(q.item_id))));
-      if(q.state==='error')a.appendChild(tgBtnSm('повторить',()=>tgAct(q.item_id,q.title,tgStateById(q.item_id))));
-      a.appendChild(tgBtnSm('убрать',()=>tgRemove(q.item_id)))}
+    if(q.state==='queued')a.appendChild(tgBtnSm('Убрать',()=>tgRemove(q.item_id),'x'));
+    else if(cur)a.appendChild(tgBtnSm('Отменить',()=>tgAct(q.item_id,q.title,tgStateById(q.item_id)),'x'));
+    else{if(q.state==='problem')a.appendChild(tgBtnSm('Всё равно отправить',()=>tgAct(q.item_id,q.title,tgStateById(q.item_id)),'external'));
+      if(q.state==='error')a.appendChild(tgBtnSm('Повторить',()=>tgAct(q.item_id,q.title,tgStateById(q.item_id)),'refresh'));
+      a.appendChild(tgBtnSm('Убрать',()=>tgRemove(q.item_id),'x'))}
     r.appendChild(a);return r};
   act.forEach(q=>box.appendChild(row(q,q.state==='queued'?String(q.position||''):'▸')));
   if(fin.length){box.appendChild(el('div','tgq-h2','последние'));fin.slice(0,8).forEach(q=>box.appendChild(row(q,'·')))}
-  if(multi.length){box.appendChild(el('div','tgq-h2','отправлены томами по старым правилам — можно переслать одним файлом'));
-    multi.forEach(([id,s])=>{const r=el('div','tgq-row');r.appendChild(el('span','tgq-n','·'));const t=el('div','tgq-t');
+  if(multi.length){box.appendChild(el('div','tgq-h2','отправлены томами по старым правилам — можно переслать одним файлом'));const mb=el('div');box.appendChild(mb);
+    pager(mb,multi,([id,s])=>{const r=el('div','tgq-row');r.appendChild(el('span','tgq-n','·'));const t=el('div','tgq-t');
       t.appendChild(el('span',null,(s.author?s.author+' — ':'')+(s.title||id)));t.appendChild(el('small',null,`${tgVols(s.of)} · ${fmtD(s.updated)}`));r.appendChild(t);
-      const a=el('div','tgq-a');a.appendChild(tgBtnSm('переслать одним файлом',()=>tgAct(id,s.title,tgStateById(id))));r.appendChild(a);box.appendChild(r)})}}
+      const a=el('div','tgq-a');a.appendChild(tgBtnSm('Переслать одним файлом',()=>tgAct(id,s.title,tgStateById(id)),'external'));r.appendChild(a);return r},{page:8,key:'tgmulti',small:true})}}
 
 /* ---------------- check ---------------- */
 let CK_T=null;
@@ -6274,7 +6446,7 @@ function renderCheck(j){const job=j.job,L=j.last;$('#ckQuick').disabled=$('#ckFu
   if(!P.length)pb.innerHTML='<p class="sub">Проблем нет.</p>';
   else{let h='<div class="tw"><table class="lib"><thead><tr><th>Книга</th><th>Проблема</th><th>Подробности</th><th>Путь</th><th></th></tr></thead><tbody>';
     P.forEach((p,i)=>{h+=`<tr><td class="t" data-id="${esc(p.id)}">${esc(p.label||p.id)}</td><td><span class="badge bad">${esc(p.kind_ru)}</span></td><td>${esc(p.detail)}</td>`
-      +`<td class="path"><code>${esc(p.win_path||p.path||'')}</code></td><td>${p.path?`<button class="ghost sm" data-dir="${esc(p.id)}">открыть папку</button>`:''}</td></tr>`});
+      +`<td class="path"><code>${esc(p.win_path||p.path||'')}</code></td><td class="tdacts">${p.path?`<button class="ghost sm" type="button" data-dir="${esc(p.id)}"><svg aria-hidden="true"><use href="/kit/icons/sprite.svg#i-folder-open"/></svg>В папке</button>`:''}</td></tr>`});
     pb.innerHTML=h+'</tbody></table></div>';
     pb.querySelectorAll('[data-id]').forEach(n=>n.onclick=()=>openItem(n.dataset.id));
     pb.querySelectorAll('[data-dir]').forEach(n=>n.onclick=()=>post('/api/open-dir',{item_id:n.dataset.dir}).then(()=>toast('Открываю папку…')).catch(e=>toast(e.message,'err')))}
@@ -6321,9 +6493,12 @@ function ddAct(i){if(!DD)return;DD.act=i;const its=DD.menu.querySelectorAll('but
 function ddPick(i){const {sel,btn}=DD;ddClose();btn.focus();if(sel.selectedIndex===i)return;sel.selectedIndex=i;sel.dispatchEvent(new Event('input',{bubbles:true}));sel.dispatchEvent(new Event('change',{bubbles:true}))}
 /* «⋯» — остальные действия строки одним меню (главное действие — одна кнопка, не ряд из пяти). Та же плита, что у списков .dd-menu */
 let CM=null;
-function ctxMenu(btn,items){const same=CM&&CM.btn===btn;cmClose(true);if(same)return;const m=el('div','dd-menu');m.setAttribute('role','menu');m.tabIndex=-1;
-  items.forEach(it=>{if(!it)return;if(it==='-'){m.appendChild(el('hr'));return}const b=el('button');b.type='button';b.setAttribute('role','menuitem');b.appendChild(el('span',null,it.label));if(it.title)b.title=it.title;b.disabled=!!it.disabled;
+function ctxMenu(btn,items){const same=CM&&CM.btn===btn;cmClose(true);if(same)return;const m=el('div','dd-menu ctx');m.setAttribute('role','menu');m.tabIndex=-1;
+  let last=null;items.forEach(it=>{if(!it)return;if(it==='-'){if(last&&last!=='-')m.appendChild(el('hr'));last='-';return}last=it;const b=el('button');b.type='button';b.setAttribute('role',it.checked!=null?'menuitemcheckbox':'menuitem');
+    b.appendChild(it.icon?ICON(it.checked?'check':it.icon):el('i','ic'));if(it.checked!=null)b.setAttribute('aria-checked',String(!!it.checked));
+    b.appendChild(el('span',null,it.label));if(it.title)b.title=it.title;b.disabled=!!it.disabled;
     b.onclick=e=>{e.stopPropagation();cmClose();it.onClick&&it.onClick(e)};b.onmousedown=e=>e.stopPropagation();m.appendChild(b)});
+  if(m.lastElementChild&&m.lastElementChild.tagName==='HR')m.lastElementChild.remove();
   document.body.appendChild(m);CM={btn,menu:m};btn.setAttribute('aria-expanded','true');
   const r=btn.getBoundingClientRect(),below=innerHeight-r.bottom-12,up=below<220&&r.top>below;
   m.style.left=Math.min(Math.max(12,r.right-m.offsetWidth),innerWidth-m.offsetWidth-12)+'px';
@@ -6335,10 +6510,6 @@ function ctxMenu(btn,items){const same=CM&&CM.btn===btn;cmClose(true);if(same)re
 function cmClose(now){if(!CM)return;const {menu,btn}=CM;CM=null;btn.setAttribute('aria-expanded','false');if(now){menu.remove();return}exit(menu,{dy:-4,scale:.98,blur:3,response:.2}).then(()=>menu.remove())}
 document.addEventListener('mousedown',e=>{if(CM&&!e.target.closest('.dd-menu')&&!CM.btn.contains(e.target))cmClose()},true);
 addEventListener('scroll',()=>cmClose(),{passive:true,capture:true});
-// items: [{label,title,disabled,onClick}|'-'] или функция, собирающая их в момент открытия; btnItem(b) — пункт из готовой кнопки (её текст, состояние и обработчик)
-const btnItem=(b,label)=>b?{label:label||b.textContent,title:b.title||'',disabled:b.disabled,onClick:()=>b.click()}:null;
-function moreBtn(items,small){const b=el('button','ghost'+(small?' sm':'')+' more','⋯');b.type='button';b.title='Ещё действия';b.setAttribute('aria-label','Ещё действия');b.setAttribute('aria-haspopup','menu');b.setAttribute('aria-expanded','false');
-  b.onmousedown=e=>e.stopPropagation();b.onclick=e=>{e.stopPropagation();ctxMenu(b,typeof items==='function'?items():items)};return b}
 function ddClose(now){if(!DD)return;const {menu,btn}=DD;DD=null;btn.setAttribute('aria-expanded','false');if(now){menu.remove();return}exit(menu,{dy:-4,scale:.98,blur:3,response:.2}).then(()=>menu.remove())}
 document.addEventListener('pointerdown',e=>{if(DD&&!DD.menu.contains(e.target)&&!DD.btn.contains(e.target))ddClose()},true);
 addEventListener('scroll',e=>{if(DD&&!DD.menu.contains(e.target))ddClose(true)},true);addEventListener('resize',()=>ddClose(true));
@@ -6361,9 +6532,10 @@ document.addEventListener('keydown',e=>{
 
 /*AI:JS*/
 /*FIND:JS*/
-(async()=>{paintMode();await loadProfiles();await refreshMeta();paintMode();const h=location.hash.slice(1);
-  if(h.startsWith('item='))openItem(decodeURIComponent(h.slice(5)));
-  else if(h.startsWith('search=')){show('rate',true);$('#palQ').value=decodeURIComponent(h.slice(7));requestAnimationFrame(openPal)}else if(['reviews','queue','next','chat','find','anketa','stats','library','check','export','setup'].includes(h))show(h,true);else if(needsOnboarding())show('anketa',true);else show('rate',true);
+(async()=>{const first=(async()=>{paintMode();await loadProfiles();await refreshMeta();paintMode();bootMark('data');const h=location.hash.slice(1);
+  if(h.startsWith('item='))await openItem(decodeURIComponent(h.slice(5)));
+  else if(h.startsWith('search=')){show('rate',true);$('#palQ').value=decodeURIComponent(h.slice(7));requestAnimationFrame(openPal)}else if(['reviews','queue','next','chat','find','anketa','stats','library','check','export','setup'].includes(h))show(h,true);else if(needsOnboarding())show('anketa',true);else show('rate',true)})();
+  bootDone(first);await first;
   api('/api/verify').then(j=>{if(j.job.running){procCheck(j.job);pollCheck()}}).catch(()=>{});
   if(typeof aiTick==='function'&&typeof PROFS!=='undefined'&&PROFS.some(p=>p.running&&p.id===PROFILE))aiTick()})();
 </script></body></html>

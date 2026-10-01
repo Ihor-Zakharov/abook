@@ -38,18 +38,20 @@ import unicodedata
 from pathlib import Path
 
 HOME = Path.home() / "abook"
-STATE = HOME / "state.json"
+# тестовые переопределения (проверка целостности без живой библиотеки): $ABOOK_STATE, $ABOOK_TG_SENT, $ABOOK_TG_TMP,
+# $ABOOK_TG_CAP_BYTES — как у `abook --state`
+STATE = Path(os.environ.get("ABOOK_STATE") or HOME / "state.json")
 DB = HOME / "library.db"
 SECRETS_FILE = HOME / "telegram.json"
 SESSION_BASE = HOME / "tg"                 # -> tg.session
 SESSION_FILE = HOME / "tg.session"
-SENT_FILE = HOME / "tg-sent.json"
-TG_TMP = Path("/mnt/d/VideoDownloader/Аудиокниги/.tg-tmp")
+SENT_FILE = Path(os.environ.get("ABOOK_TG_SENT") or HOME / "tg-sent.json")
+TG_TMP = Path(os.environ.get("ABOOK_TG_TMP") or "/mnt/d/VideoDownloader/Аудиокниги/.tg-tmp")
 
 FFMPEG = shutil.which("ffmpeg") or str(Path.home() / ".local/bin/ffmpeg")
 FFPROBE = shutil.which("ffprobe") or str(Path.home() / ".local/bin/ffprobe")
 
-CAP_BYTES = int(1.9 * 1024 ** 3)           # жёсткий лимит MTProto на файл
+CAP_BYTES = int(os.environ.get("ABOOK_TG_CAP_BYTES") or 1.9 * 1024 ** 3)   # лимит MTProto на файл (env — для тестов)
 SAFETY_BYTES = int(CAP_BYTES * 0.97)       # запас на неточность оценки битрейта
 
 # профили сжатия: None = stream copy (как есть), иначе перекодируем каждый том в AAC при нарезке.
@@ -246,6 +248,42 @@ def pick_effective_profile(quality, source_info, orig_bps):
 
 # --------------------------------------------------------------------------- план нарезки на тома
 
+def measured_duration(src):
+    """Длительность по самим пакетам: один проход ffmpeg с копированием потока (секунды на ГБ, без декодирования).
+    Для mp3 ffprobe берёт длительность из Xing-заголовка, а без него — оценкой по битрейту первого кадра:
+    у VBR без Xing ошибка в десятки процентов (51 мин → «73 мин»), и план томов выходит за конец файла."""
+    r = subprocess.run([FFMPEG, "-nostdin", "-hide_banner", "-i", str(src), "-map", "0:a:0", "-c", "copy",
+                        "-f", "null", "-"], capture_output=True, text=True, timeout=3600)
+    ts = re.findall(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", r.stderr or "")
+    if r.returncode != 0 or not ts:
+        return None
+    h, m, sec = ts[-1]
+    return int(h) * 3600 + int(m) * 60 + float(sec)
+
+
+def plan_send(src, it, quality):
+    """Общий расчёт для --dry-run и отправки: (duration_sec, profile, bps, plan, skipped).
+    Длительность — по самому файлу (ffprobe), а не по state.json: план покрывает весь файл.
+    Не влезает в лимит — пережимаем одним файлом в битрейт, при котором влезает целиком;
+    на тома режем, только если даже 32 кбит/с не влезает (книги на 100+ часов)."""
+    fdur, chapters = probe_chapters(src)
+    if src.suffix.lower() == ".mp3":
+        fdur = measured_duration(src) or fdur
+    duration_sec = fdur or float(it.get("duration_sec") or 0)
+    size_bytes = src.stat().st_size if src.exists() else (it.get("size_bytes") or 0)
+    orig_bps = size_bytes / duration_sec if duration_sec else 0
+    profile, bps = pick_effective_profile(quality, detect_source_audio(src), orig_bps)
+    skipped = quality != "original" and profile is None
+    if duration_sec and bps * duration_sec > SAFETY_BYTES:
+        fit_kbps = int(SAFETY_BYTES * 8 / duration_sec / 1000) - 2
+        if fit_kbps >= 32:
+            profile = {"bitrate_kbps": min(fit_kbps, 96), "ac": 1, "ar": 44100}
+            bps = profile["bitrate_kbps"] * 1000 / 8
+            skipped = False
+    plan = build_split_plan(duration_sec, bps * duration_sec if duration_sec else size_bytes, chapters)
+    return duration_sec, profile, bps, plan, skipped
+
+
 def build_split_plan(duration_sec, size_bytes, chapters):
     """Список томов [{'start','end'}]. Режем, только если файл не влезает в 1.9 ГБ: минимальное число
     томов (каждый <= SAFETY_BYTES), срез по границе главы, если она рядом с целевой точкой, иначе по времени."""
@@ -289,10 +327,11 @@ def fmt_gb(b):
     return f"{b / 1024**3:.2f} ГБ"
 
 
-def print_plan(item_id, it, duration_sec, plan, bps, quality=DEFAULT_QUALITY, skipped=False):
+def print_plan(item_id, it, duration_sec, plan, bps, quality=DEFAULT_QUALITY, skipped=False, profile=None):
     if JSON_MODE:
         emit("plan", item_id=item_id, title=it.get("title"), author=it.get("author"),
              duration_sec=duration_sec, volumes=len(plan), quality=quality, reencode_skipped=skipped,
+             bitrate_kbps=(profile or {}).get("bitrate_kbps"),
              plan=[{"index": i, "start": v["start"], "end": v["end"],
                     "bytes": round((v["end"] - v["start"]) * bps)} for i, v in enumerate(plan, 1)])
         return
@@ -300,6 +339,10 @@ def print_plan(item_id, it, duration_sec, plan, bps, quality=DEFAULT_QUALITY, sk
     orig_bytes = it.get("size_bytes") or 0
     qname = {"original": "оригинал, без перекодирования", "high": "высокое, AAC 80 кбит/с моно",
              "speech": "речь, AAC 64 кбит/с моно", "small": "маленький, AAC 48 кбит/с моно"}.get(quality, quality)
+    qp = QUALITY_PROFILES.get(quality)
+    if profile and (not qp or profile["bitrate_kbps"] != qp["bitrate_kbps"]):
+        # подгонка «одним файлом»: печатаем реальный битрейт, а не битрейт профиля
+        qname = f"AAC {profile['bitrate_kbps']} кбит/с моно (подогнано, чтобы книга ушла одним файлом)"
     print(f"  длительность: {fmt_hms(duration_sec)}, качество: {qname}")
     if skipped:
         print("  источник уже не хуже цели по битрейту/каналам — перекодирование пропущено, отправится как есть.")
@@ -533,11 +576,42 @@ async def cmd_setup(args):
 
 # --------------------------------------------------------------------------- нарезка на диске
 
+def verify_volume(path, expect_sec, index, of, tol=1.5):
+    """Перед отправкой: файл целиком декодируется без ошибок и длительность совпадает с ожидаемой (± tol с).
+    Иначе — остановка с причиной: в канал не уходит обрезанное или битое."""
+    emit("volume_verify", index=index, of=of)
+    r = subprocess.run([FFPROBE, "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                       capture_output=True, text=True, timeout=300)
+    try:
+        got = float(r.stdout.strip())
+    except ValueError:
+        raise RuntimeError(f"том {index}/{of}: не читается длительность ({r.stderr.strip()[:200]})")
+    if expect_sec and abs(got - expect_sec) > tol:
+        real = measured_duration(path)            # ffprobe ошибается на VBR mp3 без Xing — сверяем по пакетам
+        if real is None or abs(real - expect_sec) > tol:
+            raise RuntimeError(f"том {index}/{of}: длительность {fmt_hms(real or got)} вместо {fmt_hms(expect_sec)} — не отправляю")
+    d = subprocess.run([FFMPEG, "-v", "error", "-nostdin", "-i", str(path), "-map", "0:a:0", "-f", "null", "-"],
+                       capture_output=True, text=True, timeout=7200)
+    errs = [x for x in d.stderr.splitlines() if x.strip()]
+    if d.returncode != 0 or (errs and os.environ.get("ABOOK_TG_LENIENT") != "1"):
+        raise RuntimeError(f"том {index}/{of}: ошибки декодирования ({'; '.join(errs[:2])[:200]}) — не отправляю")
+
+
+def _range_args(start, end, is_last):
+    """Границы тома — ПОСЛЕ -i (поиск на выходе): ffmpeg читает файл с начала и отбирает пакеты/сэмплы по их
+    настоящим временным меткам. `-ss` до `-i` — поиск в демуксере: в mp3 без индекса (VBR, Xing-TOC на 100
+    точек) он оценочный, и том начинается не там — на стыках терялось/дублировалось до минуты, а длительность
+    тома при этом «правильная» (её задаёт -t). Соседние тома делят одну границу: [start, end) — ни пропуска,
+    ни повтора."""
+    a = ["-ss", f"{start:.3f}"] if start > 0 else []
+    if not is_last:
+        a += ["-to", f"{end:.3f}"]
+    return a
+
+
 def cut_volume(src, start, end, out_path, is_last):
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [FFMPEG, "-y", "-nostdin", "-ss", f"{start:.3f}", "-i", str(src)]
-    if not is_last:
-        cmd += ["-t", f"{end - start:.3f}"]
+    cmd = [FFMPEG, "-y", "-nostdin", "-i", str(src)] + _range_args(start, end, is_last)
     cmd += ["-map", "0:a:0", "-c", "copy", str(out_path)]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
     if r.returncode != 0 or not out_path.exists():
@@ -549,9 +623,7 @@ def encode_volume(src, start, end, out_path, is_last, profile, title=None, autho
     out_path.parent.mkdir(parents=True, exist_ok=True)
     vdur = end - start
     enc_name, enc_extra = best_aac_encoder()
-    cmd = ["nice", "-n", "10", FFMPEG, "-y", "-nostdin", "-ss", f"{start:.3f}", "-i", str(src)]
-    if not is_last:
-        cmd += ["-t", f"{vdur:.3f}"]
+    cmd = ["nice", "-n", "10", FFMPEG, "-y", "-nostdin", "-i", str(src)] + _range_args(start, end, is_last)
     cmd += ["-map", "0:a:0", "-c:a", enc_name] + enc_extra + ["-b:a", f"{profile['bitrate_kbps']}k",
             "-ac", str(profile["ac"]), "-ar", str(profile["ar"]), "-movflags", "+faststart"]
     if title:
@@ -639,15 +711,11 @@ def make_encode_progress(index, of):
 
 async def send_item(client, target_entity, item_id, it, sent, force=False, quality=DEFAULT_QUALITY):
     src = Path(it["final_path"])
-    duration_sec = float(it.get("duration_sec") or 0)
-    size_bytes = it.get("size_bytes") or src.stat().st_size
     ext = src.suffix or ".m4a"
-    orig_bps = size_bytes / duration_sec if duration_sec else 0
-    source_info = detect_source_audio(src)
-    profile, bps = pick_effective_profile(quality, source_info, orig_bps)
-
-    _, chapters = probe_chapters(src)
-    plan = build_split_plan(duration_sec, bps * duration_sec if duration_sec else size_bytes, chapters)
+    duration_sec, profile, bps, plan, _skipped = plan_send(src, it, quality)
+    qp = QUALITY_PROFILES.get(quality)
+    if profile and (not qp or profile["bitrate_kbps"] != qp["bitrate_kbps"]):
+        emit("note", text=f"одним файлом: сжатие до {profile['bitrate_kbps']} кбит/с")
     n_vol = len(plan)
 
     if force:
@@ -660,6 +728,11 @@ async def send_item(client, target_entity, item_id, it, sent, force=False, quali
             sent.setdefault("superseded", {}).setdefault(item_id, []).append(old)
         save_sent(sent)
     done_idx = already_sent_indices(sent, item_id)
+    if done_idx:
+        prev_of = {v.get("of") for v in (item_sent_state(sent, item_id) or {}).get("volumes", [])}
+        if prev_of and prev_of != {n_vol}:
+            raise RuntimeError(f"раньше книга уходила {'/'.join(str(x) for x in sorted(x for x in prev_of if x))} томами, "
+                               f"сейчас план — {n_vol}; чтобы не потерять часть, отправьте заново целиком (переслать)")
 
     cover_jpg = None
     cover_idx = has_embedded_cover(src)
@@ -694,6 +767,7 @@ async def send_item(client, target_entity, item_id, it, sent, force=False, quali
                 encode_volume(src, v["start"], v["end"], vol_path, is_last=(i == n_vol), profile=profile,
                               title=title, author=it.get("author"), on_progress=make_encode_progress(i, n_vol))
 
+            verify_volume(vol_path, vdur, i, n_vol)      # целостность того, что уйдёт в канал
             caption = build_caption(it, item_id, duration_sec, i, n_vol, vdur)
             from telethon.tl.types import DocumentAttributeAudio
             attrs = [DocumentAttributeAudio(duration=int(round(vdur)), title=title,
@@ -750,16 +824,10 @@ async def cmd_send(args):
     item_id, it = resolve_item_or_die(args.query, items)
     quality = resolve_quality(args.quality)
 
-    duration_sec = float(it.get("duration_sec") or 0)
-    size_bytes = it.get("size_bytes") or Path(it["final_path"]).stat().st_size
-    orig_bps = size_bytes / duration_sec if duration_sec else 0
-    source_info = detect_source_audio(Path(it["final_path"]))
-    profile, bps = pick_effective_profile(quality, source_info, orig_bps)
-    _, chapters = probe_chapters(Path(it["final_path"]))
-    plan = build_split_plan(duration_sec, bps * duration_sec if duration_sec else size_bytes, chapters)
+    duration_sec, profile, bps, plan, skipped = plan_send(Path(it["final_path"]), it, quality)
 
     if args.dry_run:
-        print_plan(item_id, it, duration_sec, plan, bps, quality, skipped=(quality != "original" and profile is None))
+        print_plan(item_id, it, duration_sec, plan, bps, quality, skipped=skipped, profile=profile)
         return
 
     require_secrets()
@@ -778,7 +846,7 @@ async def cmd_send(args):
     target = secrets["target"]
     entity = await client.get_entity(target["id"])
     sent["target"] = target
-    print_plan(item_id, it, duration_sec, plan, bps, quality, skipped=(quality != "original" and profile is None))
+    print_plan(item_id, it, duration_sec, plan, bps, quality, skipped=skipped, profile=profile)
     await send_item(client, entity, item_id, it, sent, force=args.force, quality=quality)
     if args.force and args.delete_old and (item_sent_state(sent, item_id) or {}).get("complete"):
         await delete_superseded(client, entity, sent, item_id)
