@@ -482,8 +482,10 @@ def docs(conn):
     if _has_table(conn, "src_items"):
         cols = _cols(conn, "src_items")
         ann = "annotation" if "annotation" in cols else None
+        # записи, склеенные в произведение, по смыслу = своё произведение: вектор считается один раз — у works
+        only_loose = "work_id" in cols and _has_table(conn, "works")
         for r in conn.execute("SELECT id, author, work, title, reader" + (f", {ann}" if ann else "")
-                              + " FROM src_items WHERE availability!='members'"):
+                              + " FROM src_items WHERE availability!='members'" + (" AND work_id IS NULL" if only_loose else "")):
             a = _tidy(r[1])
             if a:             # без автора — анонсы, стримы, «100 000 подписчиков»: в векторы не идут (шум)
                 add("src", r[0], [f"{a} — {_tidy(r[2] or r[3])}", r[4], r[5] if ann else ""])
@@ -726,9 +728,26 @@ def foryou(conn, pid, k=20, q=""):
     """Топ нескачанного «для вас» со всего каталога (произведения каталога источников + библиотека без файла):
     двухэтапный отбор abook_rank.rank — модель вкуса, качество, доступность, язык, длительность."""
     import abook_rank as R   # noqa: PLC0415
-    res = R.rank(conn, pid, q, k=k, mode="foryou")
-    res.update(k=k, signals=len(R.profile(conn, pid)["pos"]))
+    key = (pid, k, q)
+    hit = _FORYOU.get(key)
+    if hit and time.time() - hit[0] < FORYOU_TTL:
+        return {**hit[1], "cached": True}
+    res = R.rank(conn, pid, q, k=k + 8, mode="foryou")
+    items = [x for x in res.get("items") or [] if not _BAD_AUTHOR.match(str(x.get("author") or "").strip())][:k]
+    res.update(items=items, k=k, signals=len(R.profile(conn, pid)["pos"]))
+    _FORYOU[key] = (time.time(), res)
     return res
+
+
+# «Для вас» считается 5–15 с (модель вкуса по всему каталогу) — кэш на профиль; реакции и анкета его сбрасывают
+FORYOU_TTL = 30 * 60
+_FORYOU = {}
+_BAD_AUTHOR = re.compile(r"^(ии|ai|нейросеть|неизвестен|unknown|аноним)?$", re.I)
+
+
+def foryou_reset(pid=None):
+    for key in [k for k in _FORYOU if pid is None or k[0] == pid]:
+        _FORYOU.pop(key, None)
 
 
 # ------------------------------------------------------------------ кандидаты для RAG консультанта

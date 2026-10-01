@@ -884,6 +884,10 @@ def _good_narrators():
 _LANGW = threading.local()   # баллы языков текущего профиля (abook_ai.lang_weights) — ставит воркер поиска
 
 
+FAST_GOOD = 4      # столько записей с точным названием из каталога/площадок — и ИИ не нужен надолго
+FAST_WAIT = 20     # с: сколько тогда ещё ждать ИИ (уточнит объём и чтеца, если успеет)
+
+
 def assess(c, work, titles):
     """Итог по кандидату: годится ли, пометки, баллы. Меняет c на месте."""
     pr = c.get("probe") or {}
@@ -1219,12 +1223,23 @@ def _search_worker(sid, job):
         if job.get("cancel"):
             raise Cancelled()
         phase(job, "Жду ответа Claude и Antigravity")
+        # быстрый путь: каталог и площадки уже дали ≥ FAST_GOOD записей с точным названием — ИИ ждём ≤ FAST_WAIT с
+        good = sum(1 for c in cat0 + r1 if relevance(f"{c.get('title') or ''} {c.get('author') or ''}", [raw]) >= 0.99)
+        t_wait0 = time.time()
         # Antigravity — помощник: как только ответил Claude, ждём его не дольше AGY_GRACE с, потом идём дальше без него
         t_claude = None
         while any(t.is_alive() for t in ths):
             time.sleep(0.5)
             if job.get("cancel"):
                 raise Cancelled()
+            if good >= FAST_GOOD and time.time() - t_wait0 > FAST_WAIT:
+                for pr in list(job["procs"]):
+                    threading.Thread(target=kill, args=(pr,), daemon=True).start()
+                for nm in ("Claude", "Antigravity"):
+                    if nm.lower() not in out:
+                        _src(job, nm, "skip", note=f"не ждал дольше {FAST_WAIT} с: точных записей уже {good}")
+                meta["fast_path"] = good
+                break
             if not ths[0].is_alive():
                 t_claude = t_claude or time.time()
                 if "claude" in out and ths[1].is_alive() and time.time() - t_claude > AGY_GRACE:
@@ -1245,6 +1260,12 @@ def _search_worker(sid, job):
                 work[k] = v
         if not work.get("expected_h") and a_d and (a_d.get("work") or {}).get("expected_h"):
             work["expected_h"] = a_d["work"]["expected_h"]
+        if not work.get("expected_h"):          # без ИИ: ожидаемый объём — по найденным записям с точным названием
+            durs = sorted((c.get("duration") or 0) / 3600 for c in cat0 + r1
+                          if (c.get("duration") or 0) > 1800 and relevance(f"{c.get('title') or ''} {c.get('author') or ''}", [raw]) >= 0.99)
+            if len(durs) >= 3:
+                work["expected_h"] = round(durs[(len(durs) * 3) // 4 - (1 if len(durs) % 4 == 0 else 0)], 1)   # 3-я четверть: полные, а не сокращённые
+                meta["expected_from"] = f"по {len(durs)} записям"
         if not work.get("narrator_wanted") and heur["work"]["narrator_wanted"]:
             work["narrator_wanted"] = heur["work"]["narrator_wanted"]
         work = {"author": _s(work.get("author"), 200), "title": _s(work.get("title"), 300),

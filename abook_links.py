@@ -1493,6 +1493,9 @@ def handle_post(h, conn, p, payload):
         return h._json(memory_op(conn, pid, payload))
     if p == "/api/find/feedback":
         with contextlib.suppress(Exception):
+            import abook_vec as V   # noqa: PLC0415
+            V.foryou_reset(pid)                    # реакция меняет вкус — «Для вас» пересчитать
+        with contextlib.suppress(Exception):
             import abook_memory as MEM   # noqa: PLC0415
             v = {"like": "нравится", "dislike": "не моё", "read": "уже читал", "none": "снял отметку"}.get(payload.get("verdict"), "")
             MEM.log_event(conn, pid, "реакция", f"{_s(payload.get('author'), 200)} — «{_s(payload.get('title'), 300)}»: {v}")

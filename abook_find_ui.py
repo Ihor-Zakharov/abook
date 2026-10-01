@@ -89,7 +89,7 @@ details>summary.fdsum{cursor:pointer;font-size:13px;color:var(--ink-3);list-styl
 .fdtop{display:flex;align-items:center;gap:12px;width:min(880px,100%);margin:0 auto;padding:14px 24px;min-height:60px}   /* the same column as the messages: nothing drifts to the far edge of a wide window */
 .fdtop h2{margin:0;flex:0 1 auto;font:600 16px/1.3 var(--font-text);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .fdtop .seg,.fdtop .switch{flex:none}.fdtop .spacer{flex:1 0 8px}
-.fdtop .sub{flex:0 1 auto;min-width:0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fdtop .sub{flex:0 1 auto;min-width:0;max-width:38%;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fdmsgs{flex:1;min-height:0;overflow:auto;scroll-behavior:smooth}
 .fdcol{width:min(880px,100%);margin:0 auto;padding:12px 24px 24px;display:flex;flex-direction:column;gap:22px}
 .fdempty{display:flex;flex-direction:column;gap:12px;align-items:center;text-align:center;padding-top:clamp(40px,18vh,200px)}
@@ -129,6 +129,7 @@ details>summary.fdsum{cursor:pointer;font-size:13px;color:var(--ink-3);list-styl
 .fdsfind{height:32px;font-size:13px}
 /* мини-вход в «Что дальше» */
 .ndb{display:contents}
+#v-find .fdms,#v-find .fdgh .ms{display:none}
 /* «Чат»: рельса приложения и так одна колонка иконок (см. .rail в abook) — здесь только своё */
 .fdfbb{filter:grayscale(1)}.fdfbb.on,.fdfbb:hover{filter:grayscale(1) brightness(1.4)}
 .fdchat{grid-template-columns:260px minmax(0,1fr)}
@@ -137,7 +138,7 @@ details>summary.fdsum{cursor:pointer;font-size:13px;color:var(--ink-3);list-styl
 .fdfor{display:none;min-height:0;overflow:auto;scrollbar-width:thin;border-left:1px solid var(--line-1);padding:16px 20px 24px}
 .fdforbox{display:flex;flex-direction:column;gap:10px;width:100%;text-align:left}
 .fdforbox>.fdh{align-items:center}.fdforbox>.fdh .spacer{flex:1}
-.fdforbox .fdrecs{gap:6px}.fdforbox .fdr{padding:12px 14px;gap:14px}.fdforbox .fdr .ac{max-width:52%}
+.fdforbox .fdrecs{gap:6px}.fdforbox .fdr{padding:12px 14px;gap:14px}.fdforbox .fdr .ac{max-width:46%}.fdforbox .fdr .mt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fdforwait{display:flex;flex-direction:column;gap:10px;padding:10px 0 4px;color:var(--ink-2);font-size:14px}
 .fdforwait .meter{margin:0}.fdforwait b{font:500 12.5px/1 var(--font-mono);color:var(--ink-3);font-variant-numeric:tabular-nums}
 .fdempty .fdforbox{margin-top:26px}
@@ -237,7 +238,7 @@ VIEWS = r'''<!-- ЧАТ -->
 
 <!-- НАЙТИ -->
 <section class="view" id="v-find" hidden>
-  <header class="vh"><p class="kicker">найти · библиотека · каталог · сеть</p><h2 class="vt">Любая книга — одной строкой</h2>
+  <header class="vh"><p class="kicker">найти</p><h2 class="vt">Любая книга — одной строкой</h2>
     <p class="sub" id="fdSub">Печатайте — ищу сразу в библиотеке и в каталоге интернета. Не нашлось — пошлю на площадки и к ИИ, а пожелание передам консультанту.</p></header>
   <div class="field lit fdsearch"><div class="field-ring"></div><div class="field-body"><span class="field-glyph accent"><svg><use href="/kit/icons/sprite.svg#i-search"/></svg></span>
     <input id="fdQ" autocomplete="off" spellcheck="false" maxlength="300" aria-label="Название книги, автор или пожелание" placeholder="«Пикник на обочине», «Стругацкие, чтец Кузнецов», «мрачное про космос»">
@@ -251,7 +252,6 @@ VIEWS = r'''<!-- ЧАТ -->
   </div>
   <div class="fdres" id="fdRes"></div>
   <div class="fdplate fdqplate" id="fdDl" hidden></div>
-  <div class="cols"><div class="fdplate" id="fdMem"></div><div class="fdplate fdmap" id="fdMap"></div></div>
 </section>'''
 
 JS = r'''
@@ -269,7 +269,7 @@ const FD_KIND={audiobook:'аудиокнига',radioplay:'радиоспект�
 let FDCS=null;   // счётчики каталога — один раз, для подзаголовка
 function loadFind(){fdPoll(true);api('/api/find/memory').then(j=>fdPaintMem(j.memory||[])).catch(()=>{});
   api('/api/find/vec/status').then(j=>{const d=j.daemon||{},sub=$('#fdGSem .sub');sub.textContent=!j.enabled?'векторы выключены':d.todo?'не по буквам, а по близости · индекс ещё строится: '+(d.n||0)+' из '+((d.n||0)+d.todo):'не по буквам, а по близости: аннотации и признаки'}).catch(()=>{});
-  if(!FDCS)api('/api/find/catalog/status').then(j=>{FDCS=j;const k=n=>n>=1000?Math.round(n/1000)+' тыс.':String(n);if(j.works)$('#fdSub').textContent='Печатайте — ищу сразу в библиотеке и в каталоге интернета: '+k(j.works)+' произведений, '+k(j.items)+' записей. Не нашлось — пошлю на площадки и к ИИ, а пожелание передам консультанту.'}).catch(()=>{});
+  if(!FDCS)api('/api/find/catalog/status').then(j=>{FDCS=j;const k=n=>n>=1000?Math.round(n/1000)+' тыс.':String(n);if(j.works)$('#fdSub').textContent='Библиотека и '+k(j.works)+' книг из интернета: слушайте онлайн или скачивайте';
   if(!FDWARM){FDWARM=true;for(const u of ['/api/search?q=книга','/api/find/catalog?group=work&limit=1&q=книга'])api(u).catch(()=>{})}   // прогрев индексов: первый запрос без холодного старта
   setTimeout(()=>{if(VIEW==='find'&&!typing())fdFocus()},60)}
 let FDWARM=false;
@@ -336,20 +336,21 @@ function fdRowEl(r){const wrap=el('div','fdit');wrap.dataset.key=r.key;const row
   const sel=()=>{const i=fdKeyIdx(r.key);if(i>=0)fdSelect(i,true)};
   if(r.kind==='item'){const it=r.it;n.appendChild(hl((it.author?it.author+' — ':'')+it.title,FDL.q));const b=itemBadge(it);t.appendChild(el('span','badge '+b[1],b[0]));
     m.textContent=itemSmall(it)||'в библиотеке';
-    const o=el('button','ghost sm','Открыть');o.onclick=e=>{e.stopPropagation();openItem(it.id)};a.appendChild(o);
-    if(it.has_file&&!it.custom){a.appendChild(qBtn(it,true));a.appendChild(tgBtn(it,true))}else if(!it.custom)a.appendChild(tgBtn(it,true));
+    if(!it.custom)a.appendChild(tgBtn(it,true));
+    a.appendChild(moreBtn(()=>[{label:'Открыть карточку',onClick:()=>openItem(it.id)},it.has_file&&!it.custom?btnItem(qBtn(it,true)):null],true));
     row.onclick=()=>{sel();openItem(it.id)}}
-  else if(r.kind==='work'){const w=r.w,best=w.records[0];n.appendChild(hl((w.author?w.author+' — ':'')+w.title,FDL.q));
+  else if(r.kind==='work'){const w=r.w,best=w.records[0];n.appendChild(hl(fdClean((w.author?w.author+' — ':'')+w.title),FDL.q));
     if(w.in_library)t.appendChild(el('span','badge','в библиотеке'));
     const nb=el('button','fdn',fdPl(w.records.length,'запись','записи','записей')+' ▾');nb.type='button';nb.title='Показать все записи этой книги';nb.setAttribute('aria-expanded','false');nb.onclick=e=>{e.stopPropagation();fdToggleRecs(r)};t.appendChild(nb);
     m.textContent=[w.genre,(w.langs||[]).join('/'),best?fdRecLine(best):''].filter(Boolean).join(' · ');if(best&&(best.flags||[]).length)m.title=best.flags.join(' · ');
     if(best)fdSrcActs(a,{key:best.key,url:best.link||best.url,platform:best.platform,author:w.author,title:w.title,downloadable:best.downloadable,item_id:w.in_library});
     wrap.appendChild(el('div','fdrecl'));row.onclick=()=>{sel();fdToggleRecs(r)}}
-  else{const s=r.s;n.appendChild(hl((s.author?s.author+' — ':'')+s.title,FDL.q));t.appendChild(el('span','badge no',s.platform||'каталог'));
+  else{const s=r.s;n.appendChild(hl(fdClean((s.author?s.author+' — ':'')+s.title),FDL.q));t.appendChild(el('span','badge no',s.platform||'каталог'));
     m.textContent=[s.reader,s.hours!=null?fmtH(s.hours):'',s.channel&&s.channel!==s.platform?s.channel:'',s.lang,s.downloadable?'':'только ссылка'].filter(Boolean).join(' · ')||'запись каталога';
     fdSrcActs(a,{key:s.src_key,url:s.url,platform:s.platform,author:s.author,title:s.title,downloadable:s.downloadable});row.onclick=sel}
   return wrap}
 const fdComp=x=>x.complete_score==null?'':x.complete_score>=.9?'полная':'неполная';
+const fdClean=t=>String(t||'').replace(/[\p{Extended_Pictographic}\u{FE0F}\u{200D}]/gu,'').replace(/^[\s#|•·\-–—\[\]()]+/u,'').trim();
 function fdRecLine(x){return [x.platform,x.narrator||'',fdH(x.duration),x.parts>1?fdPl(x.parts,'часть','части','частей'):'',fdComp(x),x.verified?'✓ проверено':'',x.availability==='members'?'только для спонсоров':'',!x.downloadable?'только ссылка':''].filter(Boolean).join(' · ')}
 function fdToggleRecs(r){const w=r.el;if(!w)return;const open=!w.classList.contains('open');w.classList.toggle('open',open);const nb=w.querySelector('.fdn');if(nb){nb.setAttribute('aria-expanded',String(open));nb.textContent=fdPl(r.w.records.length,'запись','записи','записей')+(open?' ▴':' ▾')}
   if(open)fdRecsFill(w,r)}
@@ -358,17 +359,20 @@ function fdRecsFill(w,r){const L=w.querySelector('.fdrecl');if(!L||L.childElemen
   for(const x of r.w.records.slice(0,16)){const d=el('div','fdrec'+(x===best?' best':''));const m=el('div','m',fdRecLine(x)+(x.title&&!same(x.title)?' · «'+x.title+'»':''));m.title=[x.title,...(x.flags||[])].filter(Boolean).join('\n');d.appendChild(m);
     const a=el('div','a');fdSrcActs(a,{key:x.key,url:x.link||x.url,platform:x.platform,author:r.w.author,title:r.w.title,downloadable:x.downloadable,item_id:x.in_library});d.appendChild(a);L.appendChild(d)}}
 // действия у записи каталога: ссылка, скачать, в Telegram, в очередь, пожаловаться; книга уже в библиотеке — открыть
-function fdSrcActs(a,c){const stop=(b,f)=>{b.onclick=e=>{e.stopPropagation();f(b)};return b};
-  a.appendChild(stop(el('button','ghost sm','Ссылка'),()=>fdOpenLink(c.url,c.platform))).title='Открыть источник и скопировать ссылку';
-  if(c.item_id){a.appendChild(stop(el('button','ghost sm','Открыть'),()=>openItem(c.item_id)));}
-  else if(c.downloadable){const Q=(FDS&&FDS.queue)||[],q=Q.find(x=>x.source_key===c.key);
-    if(q&&q.state!=='cancelled'&&q.state!=='error'){a.appendChild(el('span','badge q',q.state==='done'?'✓ скачано':FD_QST[q.state]||q.state));if(q.state==='done')a.appendChild(stop(el('button','ghost sm','Открыть'),()=>openItem(q.item_id)))}
-    else{a.appendChild(stop(el('button','ghost sm','↓ Скачать'),b=>fdDownload({catalog_key:c.key},b))).title='Скачать эту запись в библиотеку: проверка частей, склейка, проверка полноты';
-      const act=(label,action,ok,ti)=>{const b=el('button','ghost sm',label);b.title=ti;stop(b,async()=>{b.disabled=true;try{const j=await post('/api/find/act',{action,src_key:c.key,author:c.author,title:c.title});
-          toast(j.message||ok,j.state==='failed'?'err':undefined);b.textContent=j.state==='failed'?'не вышло':action==='tg'?'✈ после загрузки':'✓ в очереди';if(action==='tg'&&typeof pollTgNow==='function')pollTgNow(true);fdPoll(true)}catch(er){toast(er.message,'err');b.disabled=false}});a.appendChild(b)};
-      act('✈ в Telegram','tg','Скачаю и отправлю','Скачать и сразу отправить в Telegram');act('+ в очередь','queue','Скачаю и поставлю в очередь','Скачать и поставить в очередь прослушивания')}}
-  
-  a.appendChild(reportBtn({src_key:c.key,url:c.url,author:c.author,title:c.title},'⚑'))}
+function fdSrcActs(a,c){const stop=(b,f)=>{b.onclick=e=>{e.stopPropagation();f(b)};b.onmousedown=e=>e.stopPropagation();return b};
+  // строка «Найти»: слушать онлайн — главное; скачать — одной кнопкой с вариантами; пожаловаться — в том же меню
+  const listen=el('button','ghost sm','▶ Слушать');listen.title='Открыть запись у источника и слушать онлайн (ссылка копируется)';stop(listen,()=>fdOpenLink(c.url,c.platform));
+  const rep={label:'⚑ Что-то не так с записью',onClick:()=>reportDlg({src_key:c.key,url:c.url,author:c.author,title:c.title})};
+  if(c.item_id){a.appendChild(listen);a.appendChild(stop(el('button','ghost sm','Открыть'),()=>openItem(c.item_id)));return}
+  a.appendChild(listen);
+  if(!c.downloadable){a.appendChild(moreBtn([rep],true));return}
+  const Q=(FDS&&FDS.queue)||[],q=Q.find(x=>x.source_key===c.key);
+  if(q&&q.state!=='cancelled'&&q.state!=='error'){a.appendChild(el('span','badge q',q.state==='done'?'✓ скачано':FD_QST[q.state]||q.state));if(q.state==='done')a.appendChild(stop(el('button','ghost sm','Открыть'),()=>openItem(q.item_id)));a.appendChild(moreBtn([rep],true));return}
+  const act=(action,ok)=>async()=>{try{const j=await post('/api/find/act',{action,src_key:c.key,author:c.author,title:c.title});toast(j.message||ok,j.state==='failed'?'err':undefined);if(action==='tg'&&typeof pollTgNow==='function')pollTgNow(true);fdPoll(true)}catch(er){toast(er.message,'err')}};
+  const dl=el('button','ghost sm','↓ Скачать ▾');dl.title='Скачать полную запись: проверка частей, склейка, проверка целостности';dl.setAttribute('aria-haspopup','menu');
+  stop(dl,b=>ctxMenu(b,[{label:'На диск',title:'В библиотеку: проверка частей, склейка, проверка целостности',onClick:()=>fdDownload({catalog_key:c.key})},
+    {label:'На диск и в очередь',onClick:act('queue','Скачаю и поставлю в очередь')},{label:'В Telegram',title:'Скачать, проверить и сразу отправить',onClick:act('tg','Скачаю и отправлю')},'-',rep]));
+  a.appendChild(dl)}
 async function fdOpenLink(url,platform){if(!url){toast('Ссылки нет','warn');return}window.open(url,'_blank','noopener');try{await navigator.clipboard.writeText(url);toast('Ссылка скопирована'+(platform?' · '+platform:''))}catch(e){}}
 // Enter: книга библиотеки — открыть карточку; произведение — скачать лучшую запись (или открыть, если уже в библиотеке); запись — скачать
 function fdMain(r){if(r.kind==='item')return openItem(r.it.id);
@@ -401,7 +405,7 @@ async function fdPoll(now){clearTimeout(FDT);const my=PROFILE;let s;
   const busy=sj||dl.length||mj;FDT=setTimeout(fdPoll,busy?1500:VIEW==='find'?8000:30000)}
 
 /* ---------- результат поиска ---------- */
-function fdCurSearch(){const L=(FDS&&FDS.searches)||[];return L.find(x=>x.id===FDCUR)||L[0]||null}
+function fdCurSearch(){const L=(FDS&&FDS.searches)||[];return FDCUR?L.find(x=>x.id===FDCUR)||null:null}
 function fdPaintSearch(){const box=$('#fdRes'),s=fdCurSearch();
   if(!s){box.innerHTML='';fdPaintAct();return}
   const sig=JSON.stringify([s.id,s.status,s.job&&[s.job.phase,s.job.sources,s.job.events.length],s.result&&s.result.library&&s.result.library.state,(FDS.queue||[]).map(q=>q.source_key+q.state).join()]);
@@ -451,9 +455,13 @@ function fdCand(s,c,best){const d=el('div','fdc'+(best?' best':''));
   const by=el('div','by');by.appendChild(document.createTextNode('нашли: '+(c.found_by||[]).join(', ')+' · '));const a=el('a',null,'открыть источник');a.href=c.url;a.target='_blank';a.rel='noopener noreferrer';by.appendChild(a);d.appendChild(by);
   if(c.note)d.appendChild(el('div','note',c.note));
   const act=el('div','act');const q=(FDS.queue||[]).find(x=>x.source_key===c.key);
+  const listen=el('button','ghost sm','▶ Слушать');listen.title='Открыть у источника и слушать онлайн (ссылка копируется)';listen.onclick=()=>fdOpenLink(c.url,c.platform);act.appendChild(listen);
   if(q&&q.state!=='cancelled'&&q.state!=='error'){act.appendChild(el('span','badge q',q.state==='done'?'✓ скачано':FD_QST[q.state]||q.state));if(q.state==='done'){const o=el('button','ghost sm','Открыть');o.onclick=()=>openItem(q.item_id);act.appendChild(o)}}
-  else{const b=el('button',best?'btn primary':'ghost','Скачать');b.onclick=()=>fdDownload({search_id:s.id,key:c.key},b);act.appendChild(b);if(best)act.appendChild(el('span','sub','в библиотеку, 128 кбит/с'))}
-  act.appendChild(reportBtn({url:c.url,src_key:c.catalog_id?c.key:'',author:(s.result&&s.result.work&&s.result.work.author)||'',title:c.title,other:false}));
+  else{const dl=el('button',best?'btn primary sm':'ghost sm','↓ Скачать ▾');dl.title='Скачать полную запись: проверка частей, склейка, проверка целостности';dl.setAttribute('aria-haspopup','menu');
+    const viaCat=(action,ok)=>async()=>{try{const j=await post('/api/find/act',{action,src_key:c.key,author:(s.result&&s.result.work&&s.result.work.author)||'',title:c.title});toast(j.message||ok,j.state==='failed'?'err':undefined);fdPoll(true)}catch(er){toast(er.message,'err')}};
+    dl.onclick=()=>ctxMenu(dl,[{label:'На диск',title:'В библиотеку: проверка частей, склейка, проверка целостности',onClick:()=>fdDownload({search_id:s.id,key:c.key},dl)},
+      c.catalog_id?{label:'На диск и в очередь',onClick:viaCat('queue','Скачаю и поставлю в очередь')}:null,c.catalog_id?{label:'В Telegram',title:'Скачать, проверить и сразу отправить',onClick:viaCat('tg','Скачаю и отправлю')}:null,'-',
+      {label:'⚑ Что-то не так с записью',onClick:()=>reportDlg({url:c.url,src_key:c.catalog_id?c.key:'',author:(s.result&&s.result.work&&s.result.work.author)||'',title:c.title,other:false})}]);act.appendChild(dl)}
   d.appendChild(act);return d}
 async function fdDownload(body,btn){if(btn)btn.disabled=true;try{const j=await post('/api/find/download',body);
     toast(j.already?'Уже в загрузках · №'+(j.position||'?'):j.started?'Скачиваю — прогресс в «Загрузки» и в рельсе':'В очереди загрузок · №'+(j.position||'?'));kick(.35);$('#fdRes')._sig='';await fdPoll(true)}
@@ -518,6 +526,9 @@ $('#fdAsk').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.i
 $('#fdNew').onclick=()=>{FDSESS=-1;$('#fdIncog').checked=false;fdPaintChat({...(FDCH||{}),messages:[],session_id:null,job:null});$('#fdAsk').focus()};
 $('#fdIncog').onchange=()=>{if(FDSESS>0){FDSESS=-1}fdPaintChat({...(FDCH||{}),messages:[],session_id:null,job:null});$('#fdAsk').focus()};
 function fdOpenSess(id){FDSESS=id;fdChatLoad(true)}
+// память консультанта и карта связей живут в «Настройке», а не в поиске
+(()=>{const c=el('div','cols');c.id='fdMemMap';c.innerHTML='<div class="fdplate" id="fdMem"></div><div class="fdplate fdmap" id="fdMap"></div>';const f=$('#v-setup .sufoot');if(f)f.before(c);else $('#v-setup')?.appendChild(c)})();
+function loadMemMap(){api('/api/find/memory').then(j=>fdPaintMem(j.memory||[])).catch(()=>{});fdPoll(true)}
 // ИИ-провайдер для всего приложения: Claude или Antigravity (Gemini) — переключатель в шапке чата
 let FDLLM=null;
 async function fdPaintLlm(cur,busy){const sg=$('#fdLlm');if(!FDLLM){try{FDLLM=await api('/api/llm')}catch(e){return}}
@@ -588,7 +599,7 @@ function fdPaintChat(c,stick){if(!c)return;const box=$('#fdMsgs'),col=$('#fdCol'
       try{await post('/api/find/chat/delete',{session_id:x.id});if(FDSESS===x.id)FDSESS=0;fdChatLoad(true)}catch(e){toast(e.message,'err')}};r.appendChild(d);sl.appendChild(r)}
   if(!(c.sessions||[]).length)sl.appendChild(el('div','sub','Здесь будут разговоры.'));
   if(!$('#fdSFind')&&(c.sessions||[]).length>6){const f=el('input','in fdsfind');f.id='fdSFind';f.placeholder='Найти разговор';f.oninput=()=>fdPaintChat(FDCH);sl.before(f)}
-  const nm=(c.memory||[]).filter(m=>m.kind!=='not_interested').length;const ft=$('#fdSideFoot');ft.innerHTML='';const mb=el('button',null,'Память: '+fdPl(nm,'факт','факта','фактов'));mb.onclick=()=>show('find');mb.title='Что консультант помнит о вашем вкусе — правится во вкладке «Найти»';ft.appendChild(mb);
+  const nm=(c.memory||[]).filter(m=>m.kind!=='not_interested').length;const ft=$('#fdSideFoot');ft.innerHTML='';const mb=el('button',null,'Память: '+fdPl(nm,'факт','факта','фактов'));mb.onclick=()=>{show('setup');setTimeout(()=>$('#fdMemMap')?.scrollIntoView({block:'start'}),300)};mb.title='Что консультант помнит о вашем вкусе — правится в «Настройке»';ft.appendChild(mb);
   const ob=el('button',null,'Obsidian ↗');ob.title='Выгрузить память, профиль, книги и разговоры в vault Obsidian (D:). Двойной щелчок — забрать оттуда ваши новые факты';
   ob.onclick=async()=>{ob.disabled=true;try{const j=await post('/api/find/vault',{op:'export'});try{await navigator.clipboard.writeText(j.windows_path)}catch(e){}toast('Obsidian: '+j.notes+' заметок ('+j.written+' обновлено) · путь скопирован: '+j.windows_path)}catch(e){toast(e.message,'err')}finally{ob.disabled=false}};
   ob.ondblclick=async()=>{try{const j=await post('/api/find/vault',{op:'import'});toast('Из Obsidian: +'+j.added+' фактов');fdChatLoad()}catch(e){toast(e.message,'err')}};
@@ -625,14 +636,13 @@ function fdPaintChat(c,stick){if(!c)return;const box=$('#fdMsgs'),col=$('#fdCol'
 // проверка полноты), «✈» — скачать и сразу отправить в Telegram. Обёртка display:contents — встаёт в любой ряд кнопок.
 function ndBtns(it,small){const w=el('span','ndb');const sm=small?' sm':'';
   const stop=b=>{b.onmousedown=e=>e.stopPropagation();return b};
-  const l=stop(el('button','ghost'+sm,'Ссылка'));l.title='Открыть источник и скопировать ссылку (записи «только для спонсоров» пропускаются)';
-  l.onclick=async e=>{e.stopPropagation();l.disabled=true;try{const j=await api('/api/find/link?id='+encodeURIComponent(it.id));if(!j.url){toast('Открытой записи не нашлось — «Скачать» поищет в сети','warn');return}
-      window.open(j.url,'_blank','noopener');try{await navigator.clipboard.writeText(j.url)}catch(er){}toast('Ссылка скопирована · '+(j.source||''))}catch(er){toast(er.message,'err')}finally{l.disabled=false}};
-  const act=(b,action,ok)=>{b.onclick=async e=>{e.stopPropagation();b.disabled=true;try{const j=await post('/api/find/act',{action,item_id:it.id,author:it.author,title:it.title});toast(j.message||ok,j.state==='failed'?'err':undefined);
-      b.textContent=j.state==='failed'?'не вышло':action==='tg'?'✈ после загрузки':'↓ качается';if(typeof fdPoll==='function')fdPoll(true)}catch(er){toast(er.message,'err');b.disabled=false}}};
-  const d=stop(el('button','ghost'+sm,'↓ Скачать'));d.title='Скачать полную запись: проверка частей, склейка, проверка полноты';act(d,'get','Скачиваю');
-  const t=stop(el('button','ghost'+sm,'✈ в Telegram'));t.title='Скачать и сразу отправить в Telegram';act(t,'tg','Скачаю и отправлю');
-  w.appendChild(l);w.appendChild(d);w.appendChild(t);w.appendChild(reportBtn({item_id:it.id,author:it.author,title:it.title},'⚑'));return w}
+  const act=(action,ok)=>async(b)=>{if(b)b.disabled=true;try{const j=await post('/api/find/act',{action,item_id:it.id,author:it.author,title:it.title});toast(j.message||ok,j.state==='failed'?'err':undefined);
+      if(b)b.textContent=j.state==='failed'?'не вышло':action==='tg'?'✈ после загрузки':'↓ качается';if(typeof fdPoll==='function')fdPoll(true)}catch(er){toast(er.message,'err');if(b)b.disabled=false}};
+  const t=stop(el('button','ghost'+sm,'✈ в Telegram'));t.title='Скачать, проверить полноту и отправить в Telegram — одной кнопкой';t.onclick=e=>{e.stopPropagation();act('tg','Скачаю и отправлю')(t)};
+  w.appendChild(t);w.appendChild(moreBtn([{label:'↓ Скачать в библиотеку',title:'Проверка частей, склейка, проверка полноты',onClick:()=>act('get','Скачиваю')(null)},
+    {label:'Ссылка на источник',title:'Открыть источник и скопировать ссылку (записи «только для спонсоров» пропускаются)',onClick:async()=>{try{const j=await api('/api/find/link?id='+encodeURIComponent(it.id));if(!j.url){toast('Открытой записи не нашлось — «Скачать» поищет в сети','warn');return}
+      window.open(j.url,'_blank','noopener');try{await navigator.clipboard.writeText(j.url)}catch(er){}toast('Ссылка скопирована · '+(j.source||''))}catch(er){toast(er.message,'err')}}},'-',
+    {label:'⚑ Что-то не так с записью',onClick:()=>reportDlg({item_id:it.id,author:it.author,title:it.title})}],small));return w}
 
 // «Уже читал»: оценка 1–10 одним нажатием (отзыв «прослушано» с оценкой), полный отзыв или просто отметка
 let RDCTX=null;
@@ -681,13 +691,16 @@ function fdForPlace(){const b=fdForBox(),aside=$('#fdFor');if(!aside)return;cons
   if(fdWide.matches){if(b.parentNode!==aside)aside.appendChild(b)}
   else{const e=$('#fdCol .fdempty');if(blank&&e){if(b.parentNode!==e)e.appendChild(b)}else if(b.parentNode)b.remove()}}
 fdWide.addEventListener('change',()=>{fdForPlace();fdForLoad()});
-async function fdForLoad(force){if(FDFORP!==PROFILE){FDFOR=null;FDFORP=PROFILE}const list=$('#fdForList');if(!list||!list.isConnected)return;
+async function fdForLoad(force){if(FDFORP!==PROFILE){FDFOR=null;FDFORT=0;FDFORP=PROFILE}const list=$('#fdForList');if(!list||!list.isConnected)return;
+  // последний подбор помнится между открытиями (localStorage): лента видна сразу, свежая версия подъезжает в фоне
+  if(!FDFOR){try{const c=JSON.parse(localStorage.getItem('abook.foryou.'+PROFILE)||'null');if(c&&c.items){FDFOR=c;FDFORT=c._t||0}}catch(e){}}
   if(FDFOR&&!force&&Date.now()-FDFORT<15*60e3){fdForPaint();return}
+  if(FDFOR&&!list.childElementCount)fdForPaint();
   if(FDFORQ)return;const my=PROFILE,t0=Date.now();
   if(!FDFOR){list.innerHTML='<div class="fdforwait"><span>Собираю подбор по вашему вкусу: анкета, отзывы, память и реакции — по всему каталогу. Первый раз — до 15 с.</span><div class="meter indet"><div class="meter-fill"></div><div class="meter-glow"></div></div><b>00:00</b></div>'}
   else $('#fdForSub').textContent='обновляю…';
   const tm=setInterval(()=>{const b=list.querySelector('.fdforwait b');if(b)b.textContent=fdmm((Date.now()-t0)/1000)},500);
-  FDFORQ=api('/api/find/foryou?k=12').then(j=>{if(my!==PROFILE)return;FDFOR=j;FDFORT=Date.now();fdForPaint()})
+  FDFORQ=api('/api/find/foryou?k=12').then(j=>{if(my!==PROFILE)return;FDFOR=j;FDFORT=Date.now();j._t=FDFORT;try{localStorage.setItem('abook.foryou.'+PROFILE,JSON.stringify(j))}catch(e){}fdForPaint()})
     .catch(e=>{if(my!==PROFILE)return;list.innerHTML='';list.appendChild(el('p','sub','Подбор не собрался: '+e.message));const b=el('button','ghost sm','Попробовать ещё раз');b.onclick=()=>fdForLoad(true);list.appendChild(b)})
     .finally(()=>{FDFORQ=null;clearInterval(tm)})}
 function fdForPaint(){const list=$('#fdForList'),j=FDFOR;if(!list||!j)return;const items=(j.items||[]);list.innerHTML='';
@@ -701,12 +714,11 @@ function fdForRow(x){const lib=x.kind==='item'||x.in_library;const it=lib?{id:x.
   if(x.hours)h.appendChild(el('span','badge no',fdH(x.hours*3600)));if(x.lang&&x.lang!=='ru')h.appendChild(el('span','badge no',x.lang));c.appendChild(h);
   const t=el('div','ti'+(lib?' link':''),(r.author?r.author+' — ':'')+'«'+r.title+'»');if(lib)t.onclick=()=>openItem(it.id);c.appendChild(t);
   if(x.about)c.appendChild(el('div','wy',x.about.length>190?x.about.slice(0,188).replace(/\s+\S*$/,'')+'…':x.about));
-  const why=(x.facet_label||'').split(' / ').filter(Boolean).slice(0,2).join(' · ');
+  const why=(x.facet_label||'').split(' / ').filter(Boolean)[0]||'';
   c.appendChild(el('div','mt',[why?'похоже на: '+why:'',x.reader||'',x.quality&&x.quality.rating?'рейтинг '+Math.round(x.quality.rating*10)/10:''].filter(Boolean).join(' · ')));
-  const row=el('div','row');
-  if(it&&it.has_file){row.appendChild(qBtn(it,true));row.appendChild(tgBtn(it,true))}
-  else{row.appendChild(fdActBtn(r,'queue','+ в очередь'));row.appendChild(fdActBtn(r,'tg','✈ в Telegram'));
-    if(r.url){const l=el('button','ghost sm','Ссылка');l.title='Открыть запись в источнике и скопировать ссылку';l.onclick=()=>{window.open(r.url,'_blank','noopener');fdCopy(r.url)};row.appendChild(l)}}
+  const row=el('div','row');const rep={label:'⚑ Что-то не так с записью',onClick:()=>reportDlg({src_key:r.src_key,url:r.url,item_id:it?it.id:'',author:r.author,title:r.title})};
+  if(it&&it.has_file){row.appendChild(tgBtn(it,true));row.appendChild(moreBtn(()=>[btnItem(qBtn(it,true)),{label:'Открыть карточку',onClick:()=>openItem(it.id)}],true))}
+  else{row.appendChild(fdActBtn(r,'tg','✈ в Telegram'));row.appendChild(moreBtn(()=>[btnItem(fdActBtn(r,'queue','+ в очередь')),r.url?{label:'Ссылка на запись',title:'Открыть в источнике и скопировать ссылку',onClick:()=>{window.open(r.url,'_blank','noopener');fdCopy(r.url)}}:null,'-',rep],true))}
   ac.appendChild(row);ac.appendChild(fdFbBar(r,c0,it,()=>{clearTimeout(FDFORRT);FDFORRT=setTimeout(()=>fdForLoad(true),600)}));return c0}
 // реакция на совет: сразу уточняет вкус (rec_feedback), «не моё» — ещё и в «не интересно», «читал» — в «уже знакомо»; повторное нажатие снимает
 function fdFbBar(r,c0,it,onChange){const fb=el('div','fdfb');
@@ -720,20 +732,19 @@ function fdFbBar(r,c0,it,onChange){const fb=el('div','fdfb');
         await send(v);if(v==='dislike')post('/api/find/memory',{op:'dismiss',author:r.author,title:r.title,item_id:it?it.id:''}).catch(()=>{});
         toast(v==='like'?'Учту: больше такого':'Учту: «'+r.title+'» не предлагать')}catch(e){toast(e.message,'err')}};fb.appendChild(b)}
   paintFb();
-  if(!(it&&it.has_file)||r.src_key)fb.appendChild(reportBtn({src_key:r.src_key||'',url:r.url||'',item_id:it?it.id:'',author:r.author,title:r.title},'⚑'));
   return fb}
 function fdRec(r){const c0=el('div','fdr');const c=el('div','bd');c0.appendChild(c);const ac=el('div','ac');c0.appendChild(ac);const it=r.item;const h=el('div','h');h.appendChild(el('span','badge'+(r.kind==='bridge'?' q':''),r.kind==='bridge'?'мост':'рядом'));if(r.medium)h.appendChild(el('span','badge no',r.medium));c.appendChild(h);
   const t=el('div','ti'+(it?' link':''),(r.author?r.author+' — ':'')+'«'+r.title+'»');if(it)t.onclick=()=>openItem(it.id);c.appendChild(t);
   if(r.chain&&r.chain.feature){const ch=el('div','chain');ch.innerHTML=esc(r.chain.from||'ваш запрос')+' <i>→</i> '+esc(r.chain.feature)+' <i>→</i> '+esc(r.chain.to||r.title);c.appendChild(ch)}
   if(r.why)c.appendChild(el('div','wy',r.why));
   c.appendChild(el('div','mt',it?[it.hours?fmtH(it.hours,it.hours_exact):'',it.narrator,it.has_file?'✓ на диске':'○ в каталоге, не скачана',it.rstatus?'отзыв: '+(STL[it.rstatus]||it.rstatus):''].filter(Boolean).join(' · '):'нет в библиотеке — найду и скачаю'+(r.confidence!=null?' · уверенность '+Math.round(r.confidence*100)+'%':'')));
-  const row=el('div','row');
-  if(it&&it.has_file){if(it.rstatus&&it.rstatus!=='want')row.appendChild(el('span','badge',STL[it.rstatus]));else row.appendChild(qBtn(it,true));row.appendChild(tgBtn(it,true))}
-  else{row.appendChild(fdActBtn(r,'queue','+ в очередь'));row.appendChild(fdActBtn(r,'tg','✈ в Telegram'))}
-  if(!(it&&it.has_file)){const l=el('button','ghost sm','Ссылка');l.title='Лучшая открытая запись из каталога источников';l.onclick=async()=>{if(r.url){window.open(r.url,'_blank','noopener');fdCopy(r.url);return}l.disabled=true;
+  const row=el('div','row');const link=async()=>{if(r.url){window.open(r.url,'_blank','noopener');fdCopy(r.url);return}
       try{const j=await api('/api/find/catalog?limit=5&q='+encodeURIComponent((r.author?r.author+' ':'')+r.title));const x=(j.items||[]).find(x=>!x.drop&&x.availability!=='members');
         if(x){window.open(x.link||x.url,'_blank','noopener');try{await navigator.clipboard.writeText(x.link||x.url);toast('Ссылка скопирована: '+x.platform+(x.duration?' · '+fdH(x.duration):''))}catch(e){}}
-        else toast('В каталоге нет — нажмите «+ в очередь», найду в сети','warn')}catch(e){toast(e.message,'err')}finally{l.disabled=false}};row.appendChild(l)}
+        else toast('В каталоге нет — нажмите «+ в очередь», найду в сети','warn')}catch(e){toast(e.message,'err')}};
+  const rep={label:'⚑ Что-то не так с записью',onClick:()=>reportDlg({src_key:r.src_key||'',url:r.url||'',item_id:it?it.id:'',author:r.author,title:r.title})};
+  if(it&&it.has_file){row.appendChild(tgBtn(it,true));row.appendChild(moreBtn(()=>[it.rstatus&&it.rstatus!=='want'?{label:'Отзыв: '+STL[it.rstatus],onClick:()=>openItem(it.id)}:btnItem(qBtn(it,true)),{label:'Открыть карточку',onClick:()=>openItem(it.id)},r.src_key?rep:null],true))}
+  else{row.appendChild(fdActBtn(r,'tg','✈ в Telegram'));row.appendChild(moreBtn(()=>[btnItem(fdActBtn(r,'queue','+ в очередь')),{label:'Ссылка на запись',title:'Лучшая открытая запись из каталога источников',onClick:link},'-',rep],true))}
   const fb=fdFbBar(r,c0,it);
   ac.appendChild(row);ac.appendChild(fb);
   if(r.dl&&FD_ACT.includes(r.dl.state))c.appendChild(el('div','st',FD_QST[r.dl.state]+(r.dl.state==='downloading'&&r.dl.n>1?' · часть '+r.dl.k+'/'+r.dl.n:'')+(r.dl.pct!=null?' · '+Math.round(r.dl.pct)+'%':'')));

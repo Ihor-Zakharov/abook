@@ -574,6 +574,9 @@ def save_draft(conn, pid, payload, submit=False):
     with contextlib.suppress(Exception):
         import abook_sync   # noqa: PLC0415
         abook_sync.schedule()
+    with contextlib.suppress(Exception):
+        import abook_vec   # noqa: PLC0415 — анкета изменилась: «Для вас» пересчитать
+        abook_vec.foryou_reset(pid)
     return res
 
 

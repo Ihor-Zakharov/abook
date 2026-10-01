@@ -5126,6 +5126,7 @@ textarea.in.q{min-height:64px}
 .ghost svg{width:16px;height:16px}
 .ghost.on{background:var(--s4);border-color:var(--line-3)}
 .ghost.sm{height:32px;padding:0 10px;font-size:13px;border-radius:var(--r-s)}
+.ghost.more{width:36px;padding:0;font:600 16px/1 var(--font-text);letter-spacing:.04em;color:var(--ink-2)}.ghost.sm.more{width:32px}
 .ghost.danger{color:var(--ink-2)}.ghost.danger:hover{color:var(--err)}
 .ghost:disabled,.btn:disabled{opacity:.36;cursor:not-allowed}
 .spacer{flex:1}
@@ -5247,7 +5248,7 @@ svg.stc text.v{fill:var(--ink);font-variant-numeric:tabular-nums}
 .stbook .tt{font-size:14px;line-height:1.35;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .stbook .mm{font:500 12px/1.4 var(--font-mono);color:var(--ink-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (hover:hover){.stbook:hover{background:var(--surface)}.stbook:hover .tt{text-decoration:underline;text-decoration-color:var(--line-3);text-underline-offset:3px}}
-.sthint{color:var(--ink-3);line-height:1.6;display:flex;flex-direction:column;gap:12px;align-items:flex-start;padding:4px 0 2px}
+.sthint{color:var(--ink-3);line-height:1.6;display:flex;flex-direction:column;gap:12px;align-items:flex-start;padding:4px 0 2px}.sthint .meter{width:min(360px,100%);margin:0}
 .stdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ink-3);margin-right:9px;vertical-align:middle}
 .stdot.ok{background:var(--ok)}.stdot.warn{background:var(--warn)}.stdot.bad{background:var(--err)}
 .sttw{border:1px solid var(--line-1);border-radius:var(--r-l);background:var(--plate)}
@@ -5621,7 +5622,7 @@ function inkSeg(root,immediate){let ink=root.querySelector('.pill-ink');if(!ink)
   if(on&&root.offsetWidth)moveInk(root,on,ink,{immediate})}
 function show(v,noHash){if(v==='next')v='chat';   // «Что дальше» и «Чат» — один экран: подбор «Для вас» + консультант
   const prev=VIEW;VIEW=v;$$('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));$$('.main>.view').forEach(s=>s.hidden=s.id!=='v-'+v);inkNav(prev===v);
-  ({reviews:loadReviews,queue:loadQueue,next:()=>{loadNext();loadAiPinned()},anketa:loadAnketa,find:()=>typeof loadFind==='function'&&loadFind(),chat:()=>typeof loadChat==='function'&&loadChat(),setup:()=>typeof loadSetup==='function'&&loadSetup(),stats:loadStats,library:loadLibrary,check:loadCheck,export:loadExport,rate:()=>{if($('#card').hidden)loadQuick()}})[v]?.();
+  ({reviews:loadReviews,queue:loadQueue,next:()=>{loadNext();loadAiPinned()},anketa:loadAnketa,find:()=>typeof loadFind==='function'&&loadFind(),chat:()=>typeof loadChat==='function'&&loadChat(),setup:()=>{typeof loadSetup==='function'&&loadSetup();typeof loadMemMap==='function'&&loadMemMap()},stats:loadStats,library:loadLibrary,check:loadCheck,export:loadExport,rate:()=>{if($('#card').hidden)loadQuick()}})[v]?.();
   if(!noHash)history.replaceState(null,'',v==='rate'&&CUR?'#item='+encodeURIComponent(CUR.item.id):'#'+v);window.scrollTo(0,0);
   if(prev!==v)enter($('#v-'+v),{dy:10,blur:3,scale:1,response:.9,damping:1});sceneTo(false);smoke()}
 $$('#nav button').forEach(b=>b.onclick=()=>show(b.dataset.v));
@@ -5933,7 +5934,8 @@ function renderReviews(){const q=norm($('#rvQ').value.trim()),g=id=>$(id).value,
   const so=g('#rvSort');L.sort({date:(a,b)=>(b.updated||'').localeCompare(a.updated||''),rating:(a,b)=>(b.overall??-1)-(a.overall??-1),'rating-asc':(a,b)=>(a.overall??99)-(b.overall??99),hours:(a,b)=>(b.hours||0)-(a.hours||0),title:(a,b)=>a.title.localeCompare(b.title,'ru')}[so]);
   $('#rvCount').textContent=`${L.length} из ${RV.length}`;const box=$('#rvList');box.innerHTML='';
   if(!RV.length){const h=el('div','hint');h.appendChild(el('div',null,'Отзывов пока нет. Найдите книгу и поставьте оценку.'));const b=el('button','ghost','Найти книгу');b.onclick=openPal;h.appendChild(b);box.appendChild(h);return}
-  if(!L.length){box.appendChild(el('div','hint','Ничего не подходит под фильтры.'));return}
+  if(!L.length){const h=el('div','hint');h.appendChild(el('div',null,'Под эти фильтры ничего не подходит.'));const r=el('div','row row-center');const b=el('button','ghost','Снять фильтры');
+    b.onclick=()=>{$('#rvQ').value='';$$('#v-reviews .filters select').forEach(x=>{x.selectedIndex=x.id==='rvMax'?x.options.length-1:0});renderReviews()};r.appendChild(b);h.appendChild(r);box.appendChild(h);return}
   for(const r of L){const d=row(r,r.overall,[STL[r.status]+(r.stopped_at?' ('+r.stopped_at+')':''),fmtDT(r.updated),r.section,r.bucket?LENL[r.bucket]:'',r.hours?fmtH(r.hours,true):''].filter(Boolean).join(' · '),()=>openItem(r.item_id));
     const b=d.querySelector('.body');if(r.text)b.appendChild(el('div','sn',r.text));const mi=el('div','minis');r.tags.forEach(t=>mi.appendChild(el('span',null,t)));
     for(const [k,lab] of META.subscores)if(r.scores[k]!=null)mi.appendChild(el('span',null,lab.split('/')[0]+' '+r.scores[k]));if(r.relisten)mi.appendChild(el('span',null,'перечитать'));if(mi.children.length)b.appendChild(mi);box.appendChild(d)}}
@@ -6027,7 +6029,8 @@ const stHint=(text,go,label)=>`<div class="sthint"><span>${text}</span>${go?`<bu
 const stSec=(t,sub)=>`<div class="sts"><h3>${esc(t)}</h3>${sub?`<p class="sub">${sub}</p>`:''}</div>`;
 const chips=(a,c)=>a.length?`<ul class="stlist ${c}">${a.map(t=>`<li>${esc(t)}</li>`).join('')}</ul>`:'';
 
-async function loadStats(){try{const [s,o]=await Promise.all([api('/api/stats/full'),api('/api/stats')]);const box=$('#stBox');STC=[];
+async function loadStats(){if(!$('#stBox').childElementCount)$('#stBox').innerHTML='<div class="sthint"><span>Считаю статистику по базе…</span><div class="meter indet"><div class="meter-fill"></div><div class="meter-glow"></div></div></div>';
+  try{const [s,o]=await Promise.all([api('/api/stats/full'),api('/api/stats')]);const box=$('#stBox');STC=[];
   const L=s.library,T=s.taste,C=s.catalog,A=s.advice,ai=A.ai||{},cost=A.cost||{all:{},week:{}};
   // ---- KPI row: the one-line answer to «что здесь есть» ----
   let h=`<div class="kpis">${stK(fN(L.books),'книг в библиотеке · '+fN(L.hours)+' ч')}${stK(fN(L.downloaded),'скачано · '+fN(L.downloaded_hours)+' ч')}`+
@@ -6313,6 +6316,26 @@ function ddOpen(sel){ddClose(true);const b=sel._dd,m=el('div','dd-menu');m.setAt
     else if(e.key.length===1){const k=norm(e.key),i=[...sel.options].findIndex((o,j)=>j>DD.act&&norm(o.textContent).startsWith(k)),j=i>=0?i:[...sel.options].findIndex(o=>norm(o.textContent).startsWith(k));if(j>=0)ddAct(j)}}}
 function ddAct(i){if(!DD)return;DD.act=i;const its=DD.menu.querySelectorAll('button');its.forEach((x,j)=>x.classList.toggle('act',j===i));its[i]?.scrollIntoView({block:'nearest'})}
 function ddPick(i){const {sel,btn}=DD;ddClose();btn.focus();if(sel.selectedIndex===i)return;sel.selectedIndex=i;sel.dispatchEvent(new Event('input',{bubbles:true}));sel.dispatchEvent(new Event('change',{bubbles:true}))}
+/* «⋯» — остальные действия строки одним меню (главное действие — одна кнопка, не ряд из пяти). Та же плита, что у списков .dd-menu */
+let CM=null;
+function ctxMenu(btn,items){const same=CM&&CM.btn===btn;cmClose(true);if(same)return;const m=el('div','dd-menu');m.setAttribute('role','menu');m.tabIndex=-1;
+  items.forEach(it=>{if(!it)return;if(it==='-'){m.appendChild(el('hr'));return}const b=el('button');b.type='button';b.setAttribute('role','menuitem');b.appendChild(el('span',null,it.label));if(it.title)b.title=it.title;b.disabled=!!it.disabled;
+    b.onclick=e=>{e.stopPropagation();cmClose();it.onClick&&it.onClick(e)};b.onmousedown=e=>e.stopPropagation();m.appendChild(b)});
+  document.body.appendChild(m);CM={btn,menu:m};btn.setAttribute('aria-expanded','true');
+  const r=btn.getBoundingClientRect(),below=innerHeight-r.bottom-12,up=below<220&&r.top>below;
+  m.style.left=Math.min(Math.max(12,r.right-m.offsetWidth),innerWidth-m.offsetWidth-12)+'px';
+  if(up){m.style.bottom=(innerHeight-r.top+6)+'px';m.style.transformOrigin='100% 100%'}else{m.style.top=(r.bottom+6)+'px';m.style.transformOrigin='100% 0'}
+  enter(m,{dy:up?6:-6,scale:.97,blur:4,response:.34,damping:.88});m.querySelector('button:not([disabled])')?.focus({preventScroll:true});
+  m.onkeydown=e=>{e.stopPropagation();const its=[...m.querySelectorAll('button:not([disabled])')],i=its.indexOf(document.activeElement);
+    if(e.key==='ArrowDown'){e.preventDefault();its[(i+1)%its.length]?.focus()}else if(e.key==='ArrowUp'){e.preventDefault();its[(i-1+its.length)%its.length]?.focus()}
+    else if(e.key==='Escape'||e.key==='Tab'){e.preventDefault();cmClose();btn.focus()}}}
+function cmClose(now){if(!CM)return;const {menu,btn}=CM;CM=null;btn.setAttribute('aria-expanded','false');if(now){menu.remove();return}exit(menu,{dy:-4,scale:.98,blur:3,response:.2}).then(()=>menu.remove())}
+document.addEventListener('mousedown',e=>{if(CM&&!e.target.closest('.dd-menu')&&!CM.btn.contains(e.target))cmClose()},true);
+addEventListener('scroll',()=>cmClose(),{passive:true,capture:true});
+// items: [{label,title,disabled,onClick}|'-'] или функция, собирающая их в момент открытия; btnItem(b) — пункт из готовой кнопки (её текст, состояние и обработчик)
+const btnItem=(b,label)=>b?{label:label||b.textContent,title:b.title||'',disabled:b.disabled,onClick:()=>b.click()}:null;
+function moreBtn(items,small){const b=el('button','ghost'+(small?' sm':'')+' more','⋯');b.type='button';b.title='Ещё действия';b.setAttribute('aria-label','Ещё действия');b.setAttribute('aria-haspopup','menu');b.setAttribute('aria-expanded','false');
+  b.onmousedown=e=>e.stopPropagation();b.onclick=e=>{e.stopPropagation();ctxMenu(b,typeof items==='function'?items():items)};return b}
 function ddClose(now){if(!DD)return;const {menu,btn}=DD;DD=null;btn.setAttribute('aria-expanded','false');if(now){menu.remove();return}exit(menu,{dy:-4,scale:.98,blur:3,response:.2}).then(()=>menu.remove())}
 document.addEventListener('pointerdown',e=>{if(DD&&!DD.menu.contains(e.target)&&!DD.btn.contains(e.target))ddClose()},true);
 addEventListener('scroll',e=>{if(DD&&!DD.menu.contains(e.target))ddClose(true)},true);addEventListener('resize',()=>ddClose(true));
